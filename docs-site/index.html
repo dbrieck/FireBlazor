@@ -236,12 +236,10 @@
 
 <span class="keyword">var</span> builder = WebAssemblyHostBuilder.<span class="method">CreateDefault</span>(args);
 
-builder.Services.<span class="method">AddFirebase</span>(options =>
-{
-    options.<span class="property">ApiKey</span> = <span class="string">"your-api-key"</span>;
-    options.<span class="property">AuthDomain</span> = <span class="string">"your-project.firebaseapp.com"</span>;
-    options.<span class="property">ProjectId</span> = <span class="string">"your-project-id"</span>;
-});
+builder.Services.<span class="method">AddFirebase</span>(options => options
+    .<span class="method">WithProject</span>(<span class="string">"your-project-id"</span>)
+    .<span class="method">WithApiKey</span>(<span class="string">"your-api-key"</span>)
+    .<span class="method">WithAuthDomain</span>(<span class="string">"your-project.firebaseapp.com"</span>));
 
 <span class="keyword">await</span> builder.<span class="method">Build</span>().<span class="method">RunAsync</span>();</code></pre>
               </div>
