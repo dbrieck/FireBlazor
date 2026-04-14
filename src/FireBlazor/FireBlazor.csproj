@@ -8,7 +8,7 @@
 
     <!-- Package metadata -->
     <PackageId>FireBlazor</PackageId>
-    <Version>1.0.2</Version>
+    <Version>1.0.3</Version>
     <Authors>FireBlazor Contributors</Authors>
     <Description>Firebase for Blazor - Zero boilerplate, delightful DX</Description>
     <PackageTags>blazor;firebase;firestore;firebase-auth;firebase-storage;realtime-database;blazor-webassembly;dotnet;gemini;firebase-ai;app-check;wasm;authentication;cloud-firestore</PackageTags>
