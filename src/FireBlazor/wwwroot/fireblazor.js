@@ -166,6 +166,27 @@ export async function signInWithMicrosoft() {
     }
 }
 
+export async function signInWithApple() {
+    const { signInWithPopup, signInWithRedirect, OAuthProvider } = await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js');
+    const provider = new OAuthProvider('apple.com');
+    provider.addScope('email');
+    try {
+        const result = await signInWithPopup(firebaseAuth, provider);
+        return { success: true, data: mapUser(result.user) };
+    } catch (error) {
+        // Some browsers block the Apple OAuth popup while still allowing Microsoft/Google.
+        // Do not await redirect: signInWithRedirect often never resolves before unload (Promise<never>).
+        if (error?.code === 'auth/popup-blocked') {
+            void signInWithRedirect(firebaseAuth, provider).catch(() => {});
+            return {
+                success: false,
+                error: { code: 'auth/redirect-started', message: 'Redirecting to Apple…' }
+            };
+        }
+        return { success: false, error: { code: error.code || 'auth/unknown', message: error.message || String(error) } };
+    }
+}
+
 export async function signOut() {
     const { signOut: fbSignOut } = await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js');
     try {
@@ -1428,21 +1449,42 @@ export async function initializeAppCheck(options) {
     try {
         const appCheckOptions = {};
 
-        // Handle auto-debug detection
-        const shouldEnableDebug = options.debugMode ||
-            (options.autoDetectDebugMode && isLocalDevelopment());
+        // Blazor may send camelCase or PascalCase depending on interop serialization.
+        const reCaptchaSiteKey = options?.reCaptchaSiteKey ?? options?.ReCaptchaSiteKey;
+        const reCaptchaEnterpriseSiteKey = options?.reCaptchaEnterpriseSiteKey ?? options?.ReCaptchaEnterpriseSiteKey;
+        const debugMode = !!(options?.debugMode ?? options?.DebugMode);
+        const debugToken = options?.debugToken ?? options?.DebugToken;
+        const autoDetectDebugMode = !!(options?.autoDetectDebugMode ?? options?.AutoDetectDebugMode);
+        const isTokenAutoRefreshEnabled = options?.isTokenAutoRefreshEnabled ?? options?.IsTokenAutoRefreshEnabled ?? true;
 
-        if (shouldEnableDebug) {
-            self.FIREBASE_APPCHECK_DEBUG_TOKEN = options.debugToken || true;
-            if (isLocalDevelopment()) {
-                console.log('[FireBlazor] App Check: Debug mode auto-enabled (localhost detected)');
+        // Handle auto-debug detection
+        const shouldEnableDebug = debugMode || (autoDetectDebugMode && isLocalDevelopment());
+
+        const hasRecaptchaProvider = !!(reCaptchaSiteKey || reCaptchaEnterpriseSiteKey);
+
+        if (hasRecaptchaProvider && typeof self !== 'undefined' && 'FIREBASE_APPCHECK_DEBUG_TOKEN' in self) {
+            try {
+                delete self.FIREBASE_APPCHECK_DEBUG_TOKEN;
+            } catch {
+                /* ignore */
             }
         }
 
-        if (options.reCaptchaSiteKey) {
-            appCheckOptions.provider = new ReCaptchaV3Provider(options.reCaptchaSiteKey);
-        } else if (options.reCaptchaEnterpriseSiteKey) {
-            appCheckOptions.provider = new ReCaptchaEnterpriseProvider(options.reCaptchaEnterpriseSiteKey);
+        // Never set FIREBASE_APPCHECK_DEBUG_TOKEN together with reCAPTCHA: the SDK still calls
+        // exchangeDebugToken (403 until the UUID is registered) even though ReCaptchaV3Provider is used.
+        if (shouldEnableDebug && !hasRecaptchaProvider) {
+            self.FIREBASE_APPCHECK_DEBUG_TOKEN = debugToken || true;
+            if (isLocalDevelopment()) {
+                console.info('[FireBlazor] App Check: debug token flow (no reCAPTCHA). Register the token from the console in Firebase → App Check → Manage debug tokens.');
+            }
+        } else if (shouldEnableDebug && hasRecaptchaProvider && isLocalDevelopment()) {
+            console.info('[FireBlazor] App Check: reCAPTCHA provider in use; skipping FIREBASE_APPCHECK_DEBUG_TOKEN so exchangeDebugToken is not invoked.');
+        }
+
+        if (reCaptchaSiteKey) {
+            appCheckOptions.provider = new ReCaptchaV3Provider(reCaptchaSiteKey);
+        } else if (reCaptchaEnterpriseSiteKey) {
+            appCheckOptions.provider = new ReCaptchaEnterpriseProvider(reCaptchaEnterpriseSiteKey);
         } else if (shouldEnableDebug) {
             // Use CustomProvider for debug-only mode (no reCAPTCHA key required)
             // The debug token set above will be used automatically by Firebase
@@ -1456,7 +1498,7 @@ export async function initializeAppCheck(options) {
             });
         }
 
-        appCheckOptions.isTokenAutoRefreshEnabled = options?.isTokenAutoRefreshEnabled ?? true;
+        appCheckOptions.isTokenAutoRefreshEnabled = isTokenAutoRefreshEnabled;
 
         firebaseAppCheck = initializeAppCheck(firebaseApp, appCheckOptions);
         return { success: true };

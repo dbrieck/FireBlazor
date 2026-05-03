@@ -92,6 +92,12 @@ internal sealed class FirebaseJsInterop : IAsyncDisposable
         return await module.InvokeAsync<JsResult<JsUser>>("signInWithMicrosoft");
     }
 
+    public async Task<JsResult<JsUser>> SignInWithAppleAsync()
+    {
+        var module = await GetModuleAsync();
+        return await module.InvokeAsync<JsResult<JsUser>>("signInWithApple");
+    }
+
     public async Task<JsResult<object>> SignOutAsync()
     {
         var module = await GetModuleAsync();

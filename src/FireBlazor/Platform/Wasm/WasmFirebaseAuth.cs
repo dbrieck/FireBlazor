@@ -56,9 +56,10 @@ internal sealed class WasmFirebaseAuth : IFirebaseAuth
         return ProcessAuthResult(result);
     }
 
-    public Task<Result<FirebaseUser>> SignInWithAppleAsync()
+    public async Task<Result<FirebaseUser>> SignInWithAppleAsync()
     {
-        throw new NotImplementedException("SignInWithAppleAsync is not yet supported in WebAssembly.");
+        var result = await _jsInterop.SignInWithAppleAsync();
+        return ProcessAuthResult(result);
     }
 
     public Task<Result<FirebaseUser>> SignInWithFacebookAsync()
