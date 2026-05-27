@@ -209,10 +209,30 @@ export async function getIdToken(forceRefresh = false) {
     }
 }
 
-export async function sendPasswordResetEmail(email) {
+export async function sendPasswordResetEmail(email, continueUrl) {
     const { sendPasswordResetEmail: fbSendReset } = await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js');
     try {
-        await fbSendReset(firebaseAuth, email);
+        const settings = continueUrl
+            ? { url: continueUrl, handleCodeInApp: false }
+            : undefined;
+        await fbSendReset(firebaseAuth, email, settings);
+        return { success: true };
+    } catch (error) {
+        return { success: false, error: { code: error.code, message: error.message } };
+    }
+}
+
+export async function sendEmailVerification(continueUrl) {
+    const { sendEmailVerification: fbSendVerify } = await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js');
+    try {
+        if (!firebaseAuth?.currentUser) {
+            return { success: false, error: { code: 'auth/no-user', message: 'No user is currently signed in' } };
+        }
+
+        const settings = continueUrl
+            ? { url: continueUrl, handleCodeInApp: false }
+            : undefined;
+        await fbSendVerify(firebaseAuth.currentUser, settings);
         return { success: true };
     } catch (error) {
         return { success: false, error: { code: error.code, message: error.message } };
