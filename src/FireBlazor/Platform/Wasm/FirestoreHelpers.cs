@@ -11,7 +11,12 @@ internal static class FirestoreJsonOptions
     {
         PropertyNameCaseInsensitive = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        Converters = { new FieldValueConverter(), new FirestoreTimestampConverter() }
+        Converters =
+        {
+            new FieldValueConverter(),
+            new FirestoreTimestampConverter(),
+            new FirestoreLenientNullableStringJsonConverter(),
+        }
     };
 }
 

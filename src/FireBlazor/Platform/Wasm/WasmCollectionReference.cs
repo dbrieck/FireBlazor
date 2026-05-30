@@ -155,13 +155,13 @@ internal sealed class WasmCollectionReference<T> : ICollectionReference<T> where
         };
     }
 
-    public Action OnSnapshot(Action<IReadOnlyList<DocumentSnapshot<T>>> onNext, Action<Exception>? onError = null)
+    public Func<ValueTask> OnSnapshot(Action<IReadOnlyList<DocumentSnapshot<T>>> onNext, Action<Exception>? onError = null)
     {
         var queryParams = BuildQueryParams();
         var subscription = new CollectionSnapshotSubscription<T>(
             _jsInterop, _path, queryParams, onNext, onError);
         subscription.StartAsync().ConfigureAwait(false);
-        return () => subscription.Dispose();
+        return () => subscription.DisposeAsync();
     }
 
     public IAggregateQuery Aggregate()
@@ -545,40 +545,46 @@ internal sealed class CollectionSnapshotSubscription<T> : ISnapshotCallback, IDi
 
     public void Dispose()
     {
-        int subscriptionId;
-        DotNetObjectReference<ISnapshotCallback>? callbackRef;
-
-        lock (_lock)
+        if (!TryBeginDispose(out var subscriptionId, out var callbackRef))
         {
-            if (_disposed) return;
-            _disposed = true;
-            subscriptionId = _subscriptionId;
-            callbackRef = _callbackRef;
-            _callbackRef = null;
+            return;
         }
 
-        if (subscriptionId > 0)
-        {
-            _ = UnsubscribeAsync(subscriptionId);
-        }
-
-        callbackRef?.Dispose();
+        // WASM cannot block on async teardown (PlatformNotSupportedException on Monitor.Wait).
+        _ = CompleteDisposeAsync(subscriptionId, callbackRef);
     }
 
     public async ValueTask DisposeAsync()
     {
-        int subscriptionId;
-        DotNetObjectReference<ISnapshotCallback>? callbackRef;
+        if (!TryBeginDispose(out var subscriptionId, out var callbackRef))
+        {
+            return;
+        }
 
+        await CompleteDisposeAsync(subscriptionId, callbackRef);
+    }
+
+    private bool TryBeginDispose(out int subscriptionId, out DotNetObjectReference<ISnapshotCallback>? callbackRef)
+    {
         lock (_lock)
         {
-            if (_disposed) return;
+            if (_disposed)
+            {
+                subscriptionId = 0;
+                callbackRef = null;
+                return false;
+            }
+
             _disposed = true;
             subscriptionId = _subscriptionId;
             callbackRef = _callbackRef;
             _callbackRef = null;
+            return true;
         }
+    }
 
+    private async Task CompleteDisposeAsync(int subscriptionId, DotNetObjectReference<ISnapshotCallback>? callbackRef)
+    {
         if (subscriptionId > 0)
         {
             await UnsubscribeAsync(subscriptionId);

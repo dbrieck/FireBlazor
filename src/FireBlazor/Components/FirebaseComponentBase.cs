@@ -30,7 +30,7 @@ namespace FireBlazor.Components;
 public abstract class FirebaseComponentBase : ComponentBase, IDisposable
 {
     private readonly object _lock = new();
-    private readonly List<Action> _subscriptions = [];
+    private readonly List<Func<ValueTask>> _subscriptions = [];
     private bool _disposed;
 
     /// <summary>
@@ -51,7 +51,7 @@ public abstract class FirebaseComponentBase : ComponentBase, IDisposable
     /// Gets the list of active subscriptions (for testing purposes).
     /// Returns a snapshot copy to avoid threading issues.
     /// </summary>
-    protected IReadOnlyList<Action> Subscriptions
+    protected IReadOnlyList<Func<ValueTask>> Subscriptions
     {
         get
         {
@@ -68,7 +68,7 @@ public abstract class FirebaseComponentBase : ComponentBase, IDisposable
     /// Thread-safe: can be called from any thread.
     /// </summary>
     /// <param name="unsubscribe">The unsubscribe action returned by OnSnapshot methods</param>
-    protected void Subscribe(Action unsubscribe)
+    protected void Subscribe(Func<ValueTask> unsubscribe)
     {
         lock (_lock)
         {
@@ -84,7 +84,7 @@ public abstract class FirebaseComponentBase : ComponentBase, IDisposable
     /// </summary>
     protected void ClearSubscriptions()
     {
-        List<Action> subscriptionsToUnsubscribe;
+        List<Func<ValueTask>> subscriptionsToUnsubscribe;
 
         lock (_lock)
         {
@@ -92,18 +92,11 @@ public abstract class FirebaseComponentBase : ComponentBase, IDisposable
             _subscriptions.Clear();
         }
 
-        // Unsubscribe outside the lock to avoid potential deadlocks
+        // Unsubscribe outside the lock to avoid potential deadlocks.
+        // Fire-and-forget: sync component dispose cannot block on WASM.
         foreach (var unsubscribe in subscriptionsToUnsubscribe)
         {
-            try
-            {
-                unsubscribe();
-            }
-            catch (Exception ex)
-            {
-                // Log but don't throw - we want to unsubscribe all subscriptions
-                Debug.WriteLine($"[FireBlazor] Error during unsubscribe: {ex.Message}");
-            }
+            _ = UnsubscribeSafeAsync(unsubscribe);
         }
     }
 
@@ -131,6 +124,18 @@ public abstract class FirebaseComponentBase : ComponentBase, IDisposable
         if (disposing)
         {
             ClearSubscriptions();
+        }
+    }
+
+    private static async Task UnsubscribeSafeAsync(Func<ValueTask> unsubscribe)
+    {
+        try
+        {
+            await unsubscribe().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[FireBlazor] Error during unsubscribe: {ex.Message}");
         }
     }
 }

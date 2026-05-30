@@ -18,7 +18,7 @@ public interface ICollectionReference<T> where T : class
     IDocumentReference<T> Document(string id);
     Task<Result<IReadOnlyList<DocumentSnapshot<T>>>> GetAsync();
     Task<Result<DocumentReference>> AddAsync(T data);
-    Action OnSnapshot(Action<IReadOnlyList<DocumentSnapshot<T>>> onNext, Action<Exception>? onError = null);
+    Func<ValueTask> OnSnapshot(Action<IReadOnlyList<DocumentSnapshot<T>>> onNext, Action<Exception>? onError = null);
 
     /// <summary>
     /// Returns an aggregate query for this collection/query.
@@ -55,7 +55,7 @@ public interface IDocumentReference<T> where T : class
     Task<Result<Unit>> SetAsync(T data, bool merge = false);
     Task<Result<Unit>> UpdateAsync(object fields);
     Task<Result<Unit>> DeleteAsync();
-    Action OnSnapshot(Action<DocumentSnapshot<T>?> onNext, Action<Exception>? onError = null);
+    Func<ValueTask> OnSnapshot(Action<DocumentSnapshot<T>?> onNext, Action<Exception>? onError = null);
 }
 
 public sealed class DocumentSnapshot<T> where T : class

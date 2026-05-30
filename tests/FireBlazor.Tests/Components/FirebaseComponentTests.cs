@@ -92,7 +92,11 @@ public class TestFirebaseComponent : FirebaseComponentBase
 
     public void TestSubscribe(Action unsubscribe)
     {
-        Subscribe(unsubscribe);
+        Subscribe(() =>
+        {
+            unsubscribe();
+            return ValueTask.CompletedTask;
+        });
     }
 
     public void TestClearSubscriptions()

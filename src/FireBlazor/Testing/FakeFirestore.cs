@@ -647,7 +647,7 @@ internal sealed class FakeCollectionReference<T> : ICollectionReference<T> where
         return Task.FromResult(Result<DocumentReference>.Success(new DocumentReference { Id = id, Path = path }));
     }
 
-    public Action OnSnapshot(Action<IReadOnlyList<DocumentSnapshot<T>>> onNext, Action<Exception>? onError = null)
+    public Func<ValueTask> OnSnapshot(Action<IReadOnlyList<DocumentSnapshot<T>>> onNext, Action<Exception>? onError = null)
     {
         void Handler(string _) => onNext(GetAsync().Result.Value);
 
@@ -656,7 +656,11 @@ internal sealed class FakeCollectionReference<T> : ICollectionReference<T> where
         // Emit initial snapshot
         onNext(GetAsync().Result.Value);
 
-        return () => _firestore.UnsubscribeFromCollection(_path, Handler);
+        return () =>
+        {
+            _firestore.UnsubscribeFromCollection(_path, Handler);
+            return ValueTask.CompletedTask;
+        };
     }
 
     public IAggregateQuery Aggregate()
@@ -777,7 +781,7 @@ internal sealed class FakeDocumentReference<T> : IDocumentReference<T> where T :
         return Task.FromResult(Result<Unit>.Success(Unit.Value));
     }
 
-    public Action OnSnapshot(Action<DocumentSnapshot<T>?> onNext, Action<Exception>? onError = null)
+    public Func<ValueTask> OnSnapshot(Action<DocumentSnapshot<T>?> onNext, Action<Exception>? onError = null)
     {
         void Handler(string _) => onNext(GetAsync().Result.Value);
 
@@ -787,7 +791,11 @@ internal sealed class FakeDocumentReference<T> : IDocumentReference<T> where T :
         var snapshot = GetAsync().Result.Value;
         onNext(snapshot.Exists ? snapshot : null);
 
-        return () => _firestore.UnsubscribeFromDocument(_path, Handler);
+        return () =>
+        {
+            _firestore.UnsubscribeFromDocument(_path, Handler);
+            return ValueTask.CompletedTask;
+        };
     }
 }
 

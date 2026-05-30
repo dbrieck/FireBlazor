@@ -676,14 +676,69 @@ export async function firestoreAverage(path, field, queryParams) {
 const firestoreSubscriptions = new Map();
 let subscriptionIdCounter = 0;
 
+function safeInvokeDotNet(dotnetHelper, methodName, payload) {
+    if (!dotnetHelper) {
+        return Promise.resolve();
+    }
+
+    try {
+        const result = dotnetHelper.invokeMethodAsync(methodName, payload);
+        if (result && typeof result.catch === 'function') {
+            return result.catch(() => {
+                // DotNetObjectReference may be disposed during listener teardown.
+            });
+        }
+        return Promise.resolve(result);
+    } catch {
+        return Promise.resolve();
+    }
+}
+
+function createFirestoreSubscriptionState(unsubscribe) {
+    return {
+        alive: true,
+        unsubscribe,
+        pendingSnapshot: null,
+        drainPromise: null
+    };
+}
+
+async function drainCollectionSnapshotQueue(state, dotnetHelper) {
+    if (state.drainPromise) {
+        return state.drainPromise;
+    }
+
+    state.drainPromise = (async () => {
+        try {
+            while (state.alive && state.pendingSnapshot !== null) {
+                const docs = state.pendingSnapshot;
+                state.pendingSnapshot = null;
+                await safeInvokeDotNet(dotnetHelper, 'OnCollectionSnapshot', docs);
+            }
+        } finally {
+            state.drainPromise = null;
+            if (state.alive && state.pendingSnapshot !== null) {
+                void drainCollectionSnapshotQueue(state, dotnetHelper);
+            }
+        }
+    })();
+
+    return state.drainPromise;
+}
+
 export async function firestoreSubscribeDocument(path, dotnetHelper) {
     const { doc, onSnapshot } = await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js');
     try {
         const docRef = doc(firebaseFirestore, path);
         const subscriptionId = ++subscriptionIdCounter;
+        const state = createFirestoreSubscriptionState(null);
 
         const unsubscribe = onSnapshot(docRef,
             (snapshot) => {
+                if (!state.alive) {
+                    return;
+                }
+
                 const data = snapshot.exists() ? {
                     id: snapshot.id,
                     path: snapshot.ref.path,
@@ -695,17 +750,22 @@ export async function firestoreSubscribeDocument(path, dotnetHelper) {
                     }
                 } : { id: snapshot.id, path: snapshot.ref.path, exists: false };
 
-                dotnetHelper.invokeMethodAsync('OnDocumentSnapshot', data);
+                void safeInvokeDotNet(dotnetHelper, 'OnDocumentSnapshot', data);
             },
             (error) => {
-                dotnetHelper.invokeMethodAsync('OnSnapshotError', {
+                if (!state.alive) {
+                    return;
+                }
+
+                void safeInvokeDotNet(dotnetHelper, 'OnSnapshotError', {
                     code: error.code,
                     message: error.message
                 });
             }
         );
 
-        firestoreSubscriptions.set(subscriptionId, unsubscribe);
+        state.unsubscribe = unsubscribe;
+        firestoreSubscriptions.set(subscriptionId, state);
         return { success: true, data: { subscriptionId } };
     } catch (error) {
         return { success: false, error: { code: error.code, message: error.message } };
@@ -740,9 +800,14 @@ export async function firestoreSubscribeCollection(path, queryParams, dotnetHelp
         }
 
         const subscriptionId = ++subscriptionIdCounter;
+        const state = createFirestoreSubscriptionState(null);
 
         const unsubscribe = onSnapshot(q,
             (snapshot) => {
+                if (!state.alive) {
+                    return;
+                }
+
                 const docs = snapshot.docs.map(d => ({
                     id: d.id,
                     path: d.ref.path,
@@ -754,17 +819,23 @@ export async function firestoreSubscribeCollection(path, queryParams, dotnetHelp
                     }
                 }));
 
-                dotnetHelper.invokeMethodAsync('OnCollectionSnapshot', docs);
+                state.pendingSnapshot = docs;
+                void drainCollectionSnapshotQueue(state, dotnetHelper);
             },
             (error) => {
-                dotnetHelper.invokeMethodAsync('OnSnapshotError', {
+                if (!state.alive) {
+                    return;
+                }
+
+                void safeInvokeDotNet(dotnetHelper, 'OnSnapshotError', {
                     code: error.code,
                     message: error.message
                 });
             }
         );
 
-        firestoreSubscriptions.set(subscriptionId, unsubscribe);
+        state.unsubscribe = unsubscribe;
+        firestoreSubscriptions.set(subscriptionId, state);
         return { success: true, data: { subscriptionId } };
     } catch (error) {
         return { success: false, error: { code: error.code, message: error.message } };
@@ -772,9 +843,13 @@ export async function firestoreSubscribeCollection(path, queryParams, dotnetHelp
 }
 
 export function firestoreUnsubscribe(subscriptionId) {
-    const unsubscribe = firestoreSubscriptions.get(subscriptionId);
-    if (unsubscribe) {
-        unsubscribe();
+    const state = firestoreSubscriptions.get(subscriptionId);
+    if (state) {
+        state.alive = false;
+        state.pendingSnapshot = null;
+        if (state.unsubscribe) {
+            state.unsubscribe();
+        }
         firestoreSubscriptions.delete(subscriptionId);
         return { success: true };
     }
