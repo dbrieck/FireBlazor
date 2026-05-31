@@ -857,7 +857,6 @@ export function firestoreUnsubscribe(subscriptionId) {
 }
 
 let firestoreIdleRecoveryInFlight = null;
-let firestoreNetworkSuspendedForHiddenTab = false;
 let firestoreNetworkApiPromise = null;
 
 function getFirestoreNetworkApi() {
@@ -866,46 +865,6 @@ function getFirestoreNetworkApi() {
             .then(({ disableNetwork, enableNetwork }) => ({ disableNetwork, enableNetwork }));
     }
     return firestoreNetworkApiPromise;
-}
-
-/// Suspend Firestore network when the tab is hidden so the WebChannel cannot go stale while backgrounded.
-export async function firestoreSuspendTransportForHiddenTab() {
-    if (!firebaseFirestore || firestoreNetworkSuspendedForHiddenTab) {
-        return { success: true, data: { alreadySuspended: true } };
-    }
-
-    try {
-        const { disableNetwork } = await getFirestoreNetworkApi();
-        await disableNetwork(firebaseFirestore);
-        firestoreNetworkSuspendedForHiddenTab = true;
-        console.info('[FireBlazor] Firestore network suspended (tab hidden)');
-        return { success: true, data: { alreadySuspended: false } };
-    } catch (error) {
-        return {
-            success: false,
-            error: { code: error.code || 'firestore/unknown', message: error.message }
-        };
-    }
-}
-
-/// Re-enable Firestore after a short tab hide (< idle-resume threshold) when listeners were only paused.
-export async function firestoreResumeTransportIfSuspended() {
-    if (!firebaseFirestore || !firestoreNetworkSuspendedForHiddenTab) {
-        return { success: true, data: { resumed: false } };
-    }
-
-    try {
-        const { enableNetwork } = await getFirestoreNetworkApi();
-        await enableNetwork(firebaseFirestore);
-        firestoreNetworkSuspendedForHiddenTab = false;
-        console.info('[FireBlazor] Firestore network resumed (short tab return)');
-        return { success: true, data: { resumed: true } };
-    } catch (error) {
-        return {
-            success: false,
-            error: { code: error.code || 'firestore/unknown', message: error.message }
-        };
-    }
 }
 
 // Tear down every active Firestore listener and reset the WebChannel transport after a long idle tab.
@@ -938,11 +897,14 @@ export async function firestoreRecoverTransportAfterIdle() {
         }
 
         try {
-            if (!firestoreNetworkSuspendedForHiddenTab) {
+            try {
                 await disableNetwork(firebaseFirestore);
+            } catch (disableError) {
+                // Stale sessions can reject TYPE=terminate with HTTP 400; still try enableNetwork.
+                console.info('[FireBlazor] disableNetwork during idle recover ignored', disableError);
             }
+
             await enableNetwork(firebaseFirestore);
-            firestoreNetworkSuspendedForHiddenTab = false;
             console.info(
                 `[FireBlazor] Firestore transport recovered after idle (${clearedCount} listener(s) cleared)`
             );
