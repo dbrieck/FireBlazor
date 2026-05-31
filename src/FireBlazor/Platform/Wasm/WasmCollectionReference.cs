@@ -518,29 +518,72 @@ internal sealed class CollectionSnapshotSubscription<T> : ISnapshotCallback, IDi
     }
 
     [JSInvokable]
-    public void OnCollectionSnapshot(JsonElement[] data)
-    {
-        lock (_lock)
+    public void OnCollectionSnapshot(JsonElement[] data) =>
+        _ = DispatchSnapshotAsync(() =>
         {
-            if (_disposed) return;
-        }
+            var snapshots = new List<DocumentSnapshot<T>>(data.Length);
+            foreach (var item in data)
+            {
+                snapshots.Add(SnapshotParser.Parse<T>(item));
+            }
 
-        var snapshots = new List<DocumentSnapshot<T>>();
-        foreach (var item in data)
-        {
-            snapshots.Add(SnapshotParser.Parse<T>(item));
-        }
-        _onNext(snapshots);
-    }
+            _onNext(snapshots);
+        });
 
     [JSInvokable]
-    public void OnSnapshotError(JsError error)
+    public void OnSnapshotError(JsError error) =>
+        _ = DispatchSnapshotAsync(() =>
+            _onError?.Invoke(new FirebaseException(error.Code, error.Message)));
+
+    /// <summary>
+    /// Yield off the JS interop entry stack before user callbacks. Nested Firestore subscriptions
+    /// (e.g. workspace fan-out) call back into JS; re-entrant interop can fault Blazor WASM.
+    /// </summary>
+    private Task DispatchSnapshotAsync(Action dispatch)
     {
         lock (_lock)
         {
-            if (_disposed) return;
+            if (_disposed)
+            {
+                return Task.CompletedTask;
+            }
         }
-        _onError?.Invoke(new FirebaseException(error.Code, error.Message));
+
+        return DispatchSnapshotCoreAsync(dispatch);
+    }
+
+    private async Task DispatchSnapshotCoreAsync(Action dispatch)
+    {
+        await Task.Yield();
+
+        lock (_lock)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+        }
+
+        try
+        {
+            dispatch();
+        }
+        catch (Exception ex)
+        {
+            InvokeSnapshotError(ex);
+        }
+    }
+
+    private void InvokeSnapshotError(Exception ex)
+    {
+        try
+        {
+            _onError?.Invoke(ex);
+        }
+        catch
+        {
+            // Listener errors must not fault the WASM runtime.
+        }
     }
 
     public void Dispose()

@@ -676,22 +676,22 @@ export async function firestoreAverage(path, field, queryParams) {
 const firestoreSubscriptions = new Map();
 let subscriptionIdCounter = 0;
 
+let dotNetSnapshotInvokeTail = Promise.resolve();
+
 function safeInvokeDotNet(dotnetHelper, methodName, payload) {
     if (!dotnetHelper) {
         return Promise.resolve();
     }
 
-    try {
-        const result = dotnetHelper.invokeMethodAsync(methodName, payload);
-        if (result && typeof result.catch === 'function') {
-            return result.catch(() => {
-                // DotNetObjectReference may be disposed during listener teardown.
-            });
+    dotNetSnapshotInvokeTail = dotNetSnapshotInvokeTail.then(async () => {
+        try {
+            await dotnetHelper.invokeMethodAsync(methodName, payload);
+        } catch {
+            // DotNetObjectReference may be disposed during listener teardown.
         }
-        return Promise.resolve(result);
-    } catch {
-        return Promise.resolve();
-    }
+    });
+
+    return dotNetSnapshotInvokeTail;
 }
 
 function createFirestoreSubscriptionState(unsubscribe) {
