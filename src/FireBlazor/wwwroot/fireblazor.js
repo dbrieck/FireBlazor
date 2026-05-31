@@ -856,6 +856,60 @@ export function firestoreUnsubscribe(subscriptionId) {
     return { success: false, error: { code: 'not-found', message: 'Subscription not found' } };
 }
 
+let firestoreIdleRecoveryInFlight = null;
+
+// Tear down every active Firestore listener and reset the WebChannel transport after a long idle tab.
+// C# listeners must resubscribe afterward; stale gsessionid/SID pairs otherwise return HTTP 400.
+export async function firestoreRecoverTransportAfterIdle() {
+    if (firestoreIdleRecoveryInFlight) {
+        return firestoreIdleRecoveryInFlight;
+    }
+
+    firestoreIdleRecoveryInFlight = (async () => {
+        if (!firebaseFirestore) {
+            return { success: false, error: { code: 'not-initialized', message: 'Firestore not initialized' } };
+        }
+
+        const { disableNetwork, enableNetwork } =
+            await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js');
+
+        let clearedCount = 0;
+        for (const [subscriptionId, state] of firestoreSubscriptions.entries()) {
+            state.alive = false;
+            state.pendingSnapshot = null;
+            if (state.unsubscribe) {
+                try {
+                    state.unsubscribe();
+                } catch {
+                    // already torn down
+                }
+            }
+            firestoreSubscriptions.delete(subscriptionId);
+            clearedCount++;
+        }
+
+        try {
+            await disableNetwork(firebaseFirestore);
+            await enableNetwork(firebaseFirestore);
+            console.info(
+                `[FireBlazor] Firestore transport recovered after idle (${clearedCount} listener(s) cleared)`
+            );
+            return { success: true, data: { clearedCount } };
+        } catch (error) {
+            return {
+                success: false,
+                error: { code: error.code || 'firestore/unknown', message: error.message }
+            };
+        }
+    })();
+
+    try {
+        return await firestoreIdleRecoveryInFlight;
+    } finally {
+        firestoreIdleRecoveryInFlight = null;
+    }
+}
+
 // ============ STORAGE ============
 
 export async function initializeStorage(emulatorHost) {
