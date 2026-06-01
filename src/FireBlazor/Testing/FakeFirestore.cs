@@ -17,6 +17,7 @@ public sealed class FakeFirestore : IFirestore
     private readonly Dictionary<string, JsonElement> _documents = new();
     private readonly Dictionary<string, List<Action<string>>> _documentListeners = new();
     private readonly Dictionary<string, List<Action<string>>> _collectionListeners = new();
+    private readonly Dictionary<string, List<Action<string>>> _collectionGroupListeners = new();
     private FirebaseError? _simulatedError;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -35,6 +36,19 @@ public sealed class FakeFirestore : IFirestore
     public ICollectionReference<T> Collection<T>(string path) where T : class
     {
         return new FakeCollectionReference<T>(this, path);
+    }
+
+    public ICollectionGroupReference<T> CollectionGroup<T>(string collectionId) where T : class
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(collectionId);
+        if (collectionId.Contains('/'))
+        {
+            throw new ArgumentException(
+                "Collection group id must be a single collection segment, not a path.",
+                nameof(collectionId));
+        }
+
+        return new FakeCollectionGroupReference<T>(this, collectionId);
     }
 
     public Task<Result<Unit>> BatchAsync(Action<IWriteBatch> operations)
@@ -102,6 +116,7 @@ public sealed class FakeFirestore : IFirestore
         _documents.Clear();
         _documentListeners.Clear();
         _collectionListeners.Clear();
+        _collectionGroupListeners.Clear();
         _simulatedError = null;
     }
 
@@ -118,6 +133,7 @@ public sealed class FakeFirestore : IFirestore
         _documents[path] = json;
         NotifyDocumentListeners(path);
         NotifyCollectionListeners(path);
+        NotifyCollectionGroupListeners(path);
     }
 
     internal T? GetDocument<T>(string path) where T : class
@@ -136,6 +152,7 @@ public sealed class FakeFirestore : IFirestore
         _documents.Remove(path);
         NotifyDocumentListeners(path);
         NotifyCollectionListeners(path);
+        NotifyCollectionGroupListeners(path);
     }
 
     internal void UpdateDocument(string path, object fields)
@@ -183,6 +200,7 @@ public sealed class FakeFirestore : IFirestore
         _documents[path] = mergedJson;
         NotifyDocumentListeners(path);
         NotifyCollectionListeners(path);
+        NotifyCollectionGroupListeners(path);
     }
 
     private static bool IsFieldValueSentinel(JsonNode? node, out string type, out JsonNode? data)
@@ -321,6 +339,26 @@ public sealed class FakeFirestore : IFirestore
         }
     }
 
+    internal IEnumerable<(string Path, T? Data)> GetCollectionGroup<T>(string collectionId) where T : class
+    {
+        foreach (var (path, json) in _documents)
+        {
+            if (!IsDocumentInCollectionGroup(path, collectionId))
+            {
+                continue;
+            }
+
+            var data = JsonSerializer.Deserialize<T>(json.GetRawText(), JsonOptions);
+            yield return (path, data);
+        }
+    }
+
+    internal static bool IsDocumentInCollectionGroup(string documentPath, string collectionId)
+    {
+        var segments = documentPath.Split('/');
+        return segments.Length >= 2 && segments[^2] == collectionId;
+    }
+
     internal List<JsonElement> GetCollectionRaw(string collectionPath)
     {
         var result = new List<JsonElement>();
@@ -355,6 +393,19 @@ public sealed class FakeFirestore : IFirestore
         _collectionListeners[path].Add(callback);
     }
 
+    internal void SubscribeToCollectionGroup(string collectionId, Action<string> callback)
+    {
+        if (!_collectionGroupListeners.ContainsKey(collectionId))
+            _collectionGroupListeners[collectionId] = [];
+        _collectionGroupListeners[collectionId].Add(callback);
+    }
+
+    internal void UnsubscribeFromCollectionGroup(string collectionId, Action<string> callback)
+    {
+        if (_collectionGroupListeners.TryGetValue(collectionId, out var listeners))
+            listeners.Remove(callback);
+    }
+
     internal void UnsubscribeFromCollection(string path, Action<string> callback)
     {
         if (_collectionListeners.TryGetValue(path, out var listeners))
@@ -380,6 +431,22 @@ public sealed class FakeFirestore : IFirestore
         {
             foreach (var listener in listeners.ToList())
                 listener(collectionPath);
+        }
+    }
+
+    private void NotifyCollectionGroupListeners(string documentPath)
+    {
+        var segments = documentPath.Split('/');
+        if (segments.Length < 2)
+        {
+            return;
+        }
+
+        var collectionId = segments[^2];
+        if (_collectionGroupListeners.TryGetValue(collectionId, out var listeners))
+        {
+            foreach (var listener in listeners.ToList())
+                listener(collectionId);
         }
     }
 }
@@ -706,6 +773,239 @@ internal sealed class FakeCollectionReference<T> : ICollectionReference<T> where
 
         return new FakeCollectionReference<T>(_firestore, _path, _wherePredicates, _orderByFields,
             _limit, _skip, _startAt, _startAfter, _endAt, fieldValues);
+    }
+
+    private static string GetMemberName<TKey>(Expression<Func<T, TKey>> keySelector)
+    {
+        if (keySelector.Body is MemberExpression memberExpr)
+            return memberExpr.Member.Name;
+
+        throw new ArgumentException("Expression must be a member access expression", nameof(keySelector));
+    }
+}
+
+/// <summary>
+/// Fake implementation of ICollectionGroupReference for testing.
+/// </summary>
+internal sealed class FakeCollectionGroupReference<T> : ICollectionGroupReference<T> where T : class
+{
+    private readonly FakeFirestore _firestore;
+    private readonly string _collectionId;
+    private readonly List<Func<T, bool>> _wherePredicates = [];
+    private readonly List<(string Field, bool Descending)> _orderByFields = [];
+    private int? _limit;
+    private object[]? _startAt;
+    private object[]? _startAfter;
+
+    public FakeCollectionGroupReference(FakeFirestore firestore, string collectionId)
+    {
+        _firestore = firestore;
+        _collectionId = collectionId;
+    }
+
+    private FakeCollectionGroupReference(
+        FakeFirestore firestore,
+        string collectionId,
+        List<Func<T, bool>> wherePredicates,
+        List<(string Field, bool Descending)> orderByFields,
+        int? limit,
+        object[]? startAt,
+        object[]? startAfter)
+    {
+        _firestore = firestore;
+        _collectionId = collectionId;
+        _wherePredicates = [.. wherePredicates];
+        _orderByFields = [.. orderByFields];
+        _limit = limit;
+        _startAt = startAt;
+        _startAfter = startAfter;
+    }
+
+    public ICollectionGroupReference<T> Where(Expression<Func<T, bool>> predicate)
+    {
+        var compiled = predicate.Compile();
+        return new FakeCollectionGroupReference<T>(_firestore, _collectionId, [.. _wherePredicates, compiled], _orderByFields,
+            _limit, _startAt, _startAfter);
+    }
+
+    public ICollectionGroupReference<T> OrderBy<TKey>(Expression<Func<T, TKey>> keySelector)
+    {
+        var memberName = GetMemberName(keySelector);
+        return new FakeCollectionGroupReference<T>(_firestore, _collectionId, _wherePredicates, [.. _orderByFields, (memberName, false)],
+            _limit, _startAt, _startAfter);
+    }
+
+    public ICollectionGroupReference<T> OrderByDescending<TKey>(Expression<Func<T, TKey>> keySelector)
+    {
+        var memberName = GetMemberName(keySelector);
+        return new FakeCollectionGroupReference<T>(_firestore, _collectionId, _wherePredicates, [.. _orderByFields, (memberName, true)],
+            _limit, _startAt, _startAfter);
+    }
+
+    public ICollectionGroupReference<T> Take(int count)
+    {
+        return new FakeCollectionGroupReference<T>(_firestore, _collectionId, _wherePredicates, _orderByFields,
+            count, _startAt, _startAfter);
+    }
+
+    public Task<Result<IReadOnlyList<DocumentSnapshot<T>>>> GetAsync()
+    {
+        var hasCursors = _startAt != null || _startAfter != null;
+        if (hasCursors && _orderByFields.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "Cursor methods (StartAt, StartAfter) require OrderBy to be specified first. " +
+                "Firestore cursors are based on field values in the order specified by OrderBy clauses.");
+        }
+
+        if (_firestore.TryConsumeSimulatedError(out var error))
+            return Task.FromResult(Result<IReadOnlyList<DocumentSnapshot<T>>>.Failure(error!));
+
+        IEnumerable<(string Path, T? Data)> docs = _firestore.GetCollectionGroup<T>(_collectionId);
+
+        foreach (var predicate in _wherePredicates)
+        {
+            docs = docs.Where(d => d.Data != null && predicate(d.Data));
+        }
+
+        var docList = docs.Where(d => d.Data != null).ToList();
+
+        if (_orderByFields.Count > 0)
+        {
+            docList = ApplyOrdering(docList);
+        }
+
+        docList = ApplyCursors(docList);
+
+        if (_limit.HasValue)
+        {
+            docList = docList.Take(_limit.Value).ToList();
+        }
+
+        var snapshots = docList.Select(d => new DocumentSnapshot<T>
+        {
+            Id = d.Path.Split('/').Last(),
+            Path = d.Path,
+            Exists = true,
+            Data = d.Data,
+            Metadata = new SnapshotMetadata { IsFromCache = false, HasPendingWrites = false }
+        }).ToList();
+
+        return Task.FromResult(Result<IReadOnlyList<DocumentSnapshot<T>>>.Success(snapshots));
+    }
+
+    public Func<ValueTask> OnSnapshot(Action<IReadOnlyList<DocumentSnapshot<T>>> onNext, Action<Exception>? onError = null)
+    {
+        void Handler(string _) => onNext(GetAsync().Result.Value!);
+
+        _firestore.SubscribeToCollectionGroup(_collectionId, Handler);
+        onNext(GetAsync().Result.Value!);
+
+        return () =>
+        {
+            _firestore.UnsubscribeFromCollectionGroup(_collectionId, Handler);
+            return ValueTask.CompletedTask;
+        };
+    }
+
+    public ICollectionGroupReference<T> StartAt(params object[] fieldValues)
+    {
+        ArgumentNullException.ThrowIfNull(fieldValues);
+        if (fieldValues.Length == 0)
+            throw new ArgumentException("At least one field value is required", nameof(fieldValues));
+
+        return new FakeCollectionGroupReference<T>(_firestore, _collectionId, _wherePredicates, _orderByFields,
+            _limit, fieldValues, _startAfter);
+    }
+
+    public ICollectionGroupReference<T> StartAfter(params object[] fieldValues)
+    {
+        ArgumentNullException.ThrowIfNull(fieldValues);
+        if (fieldValues.Length == 0)
+            throw new ArgumentException("At least one field value is required", nameof(fieldValues));
+
+        return new FakeCollectionGroupReference<T>(_firestore, _collectionId, _wherePredicates, _orderByFields,
+            _limit, _startAt, fieldValues);
+    }
+
+    private List<(string Path, T? Data)> ApplyOrdering(List<(string Path, T? Data)> docs)
+    {
+        if (_orderByFields.Count == 0)
+            return docs;
+
+        IOrderedEnumerable<(string Path, T? Data)>? ordered = null;
+
+        foreach (var (field, descending) in _orderByFields)
+        {
+            var prop = typeof(T).GetProperty(field);
+            if (prop == null) continue;
+
+            if (ordered == null)
+            {
+                ordered = descending
+                    ? docs.OrderByDescending(d => prop.GetValue(d.Data))
+                    : docs.OrderBy(d => prop.GetValue(d.Data));
+            }
+            else
+            {
+                ordered = descending
+                    ? ordered.ThenByDescending(d => prop.GetValue(d.Data))
+                    : ordered.ThenBy(d => prop.GetValue(d.Data));
+            }
+        }
+
+        return ordered?.ToList() ?? docs;
+    }
+
+    private List<(string Path, T? Data)> ApplyCursors(List<(string Path, T? Data)> docs)
+    {
+        if (_orderByFields.Count == 0)
+            return docs;
+
+        var (orderField, descending) = _orderByFields[0];
+        var prop = typeof(T).GetProperty(orderField);
+        if (prop == null)
+            return docs;
+
+        var result = new List<(string Path, T? Data)>();
+
+        foreach (var doc in docs)
+        {
+            if (doc.Data == null) continue;
+
+            var value = prop.GetValue(doc.Data);
+            var comparable = value as IComparable;
+
+            var passesStartAt = true;
+            var passesStartAfter = true;
+
+            if (_startAt != null && _startAt.Length > 0)
+            {
+                var cursorValue = _startAt[0] as IComparable;
+                if (comparable != null && cursorValue != null)
+                {
+                    var comparison = comparable.CompareTo(cursorValue);
+                    passesStartAt = descending ? comparison <= 0 : comparison >= 0;
+                }
+            }
+
+            if (_startAfter != null && _startAfter.Length > 0)
+            {
+                var cursorValue = _startAfter[0] as IComparable;
+                if (comparable != null && cursorValue != null)
+                {
+                    var comparison = comparable.CompareTo(cursorValue);
+                    passesStartAfter = descending ? comparison < 0 : comparison > 0;
+                }
+            }
+
+            if (passesStartAt && passesStartAfter)
+            {
+                result.Add(doc);
+            }
+        }
+
+        return result;
     }
 
     private static string GetMemberName<TKey>(Expression<Func<T, TKey>> keySelector)

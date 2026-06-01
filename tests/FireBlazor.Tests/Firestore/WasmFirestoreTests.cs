@@ -43,6 +43,18 @@ public class WasmFirestoreTests
     }
 
     [Fact]
+    public void CollectionGroup_ReturnsCollectionGroupReference()
+    {
+        var jsRuntime = Substitute.For<IJSRuntime>();
+        var jsInterop = new FirebaseJsInterop(jsRuntime);
+        var firestore = new WasmFirestore(jsInterop);
+
+        var query = firestore.CollectionGroup<TestDocument>("comments");
+
+        Assert.IsAssignableFrom<ICollectionGroupReference<TestDocument>>(query);
+    }
+
+    [Fact]
     public void Collection_ThrowsOnNullPath()
     {
         var jsRuntime = Substitute.For<IJSRuntime>();

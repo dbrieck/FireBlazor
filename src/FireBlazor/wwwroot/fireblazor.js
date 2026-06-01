@@ -556,52 +556,80 @@ export async function firestoreQuery(path, queryParams) {
     const { collection, query, where, orderBy, limit, startAt, startAfter, endAt, endBefore, getDocs } = await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js');
     try {
         let q = collection(firebaseFirestore, path);
-        const constraints = [];
-
-        if (queryParams.where) {
-            for (const w of queryParams.where) {
-                constraints.push(where(w.field, w.op, w.value));
-            }
-        }
-        if (queryParams.orderBy) {
-            for (const o of queryParams.orderBy) {
-                constraints.push(orderBy(o.field, o.direction || 'asc'));
-            }
-        }
-
-        // Cursor constraints
-        if (queryParams.startAt) {
-            constraints.push(startAt(...queryParams.startAt));
-        }
-        if (queryParams.startAfter) {
-            constraints.push(startAfter(...queryParams.startAfter));
-        }
-        if (queryParams.endAt) {
-            constraints.push(endAt(...queryParams.endAt));
-        }
-        if (queryParams.endBefore) {
-            constraints.push(endBefore(...queryParams.endBefore));
-        }
-
-        if (queryParams.limit) {
-            constraints.push(limit(queryParams.limit));
-        }
+        const constraints = buildFirestoreQueryConstraints(queryParams, { where, orderBy, limit, startAt, startAfter, endAt, endBefore });
 
         q = query(q, ...constraints);
         const snapshot = await getDocs(q);
 
         return {
             success: true,
-            data: snapshot.docs.map(d => ({
-                id: d.id,
-                path: d.ref.path,
-                exists: true,
-                data: d.data(),
-                metadata: {
-                    isFromCache: d.metadata.fromCache,
-                    hasPendingWrites: d.metadata.hasPendingWrites
-                }
-            }))
+            data: mapFirestoreSnapshotDocs(snapshot)
+        };
+    } catch (error) {
+        return { success: false, error: { code: error.code, message: error.message } };
+    }
+}
+
+function buildFirestoreQueryConstraints(queryParams, constraintFns) {
+    const constraints = [];
+    if (!queryParams) {
+        return constraints;
+    }
+
+    if (queryParams.where) {
+        for (const w of queryParams.where) {
+            constraints.push(constraintFns.where(w.field, w.op, w.value));
+        }
+    }
+    if (queryParams.orderBy) {
+        for (const o of queryParams.orderBy) {
+            constraints.push(constraintFns.orderBy(o.field, o.direction || 'asc'));
+        }
+    }
+    if (queryParams.startAt) {
+        constraints.push(constraintFns.startAt(...queryParams.startAt));
+    }
+    if (queryParams.startAfter) {
+        constraints.push(constraintFns.startAfter(...queryParams.startAfter));
+    }
+    if (queryParams.endAt) {
+        constraints.push(constraintFns.endAt(...queryParams.endAt));
+    }
+    if (queryParams.endBefore) {
+        constraints.push(constraintFns.endBefore(...queryParams.endBefore));
+    }
+    if (queryParams.limit) {
+        constraints.push(constraintFns.limit(queryParams.limit));
+    }
+
+    return constraints;
+}
+
+function mapFirestoreSnapshotDocs(snapshot) {
+    return snapshot.docs.map(d => ({
+        id: d.id,
+        path: d.ref.path,
+        exists: true,
+        data: d.data(),
+        metadata: {
+            isFromCache: d.metadata.fromCache,
+            hasPendingWrites: d.metadata.hasPendingWrites
+        }
+    }));
+}
+
+export async function firestoreCollectionGroupQuery(collectionId, queryParams) {
+    const { collectionGroup, query, where, orderBy, limit, startAt, startAfter, getDocs } =
+        await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js');
+    try {
+        let q = collectionGroup(firebaseFirestore, collectionId);
+        const constraints = buildFirestoreQueryConstraints(queryParams, { where, orderBy, limit, startAt, startAfter });
+        q = query(q, ...constraints);
+        const snapshot = await getDocs(q);
+
+        return {
+            success: true,
+            data: mapFirestoreSnapshotDocs(snapshot)
         };
     } catch (error) {
         return { success: false, error: { code: error.code, message: error.message } };
@@ -773,26 +801,12 @@ export async function firestoreSubscribeDocument(path, dotnetHelper) {
 }
 
 export async function firestoreSubscribeCollection(path, queryParams, dotnetHelper) {
-    const { collection, query, where, orderBy, limit, onSnapshot } = await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js');
+    const { collection, query, where, orderBy, limit, startAt, startAfter, onSnapshot } = await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js');
     try {
         let q = collection(firebaseFirestore, path);
 
         if (queryParams) {
-            const constraints = [];
-
-            if (queryParams.where) {
-                for (const w of queryParams.where) {
-                    constraints.push(where(w.field, w.op, w.value));
-                }
-            }
-            if (queryParams.orderBy) {
-                for (const o of queryParams.orderBy) {
-                    constraints.push(orderBy(o.field, o.direction || 'asc'));
-                }
-            }
-            if (queryParams.limit) {
-                constraints.push(limit(queryParams.limit));
-            }
+            const constraints = buildFirestoreQueryConstraints(queryParams, { where, orderBy, limit, startAt, startAfter });
 
             if (constraints.length > 0) {
                 q = query(q, ...constraints);
@@ -808,16 +822,55 @@ export async function firestoreSubscribeCollection(path, queryParams, dotnetHelp
                     return;
                 }
 
-                const docs = snapshot.docs.map(d => ({
-                    id: d.id,
-                    path: d.ref.path,
-                    exists: true,
-                    data: d.data(),
-                    metadata: {
-                        isFromCache: d.metadata.fromCache,
-                        hasPendingWrites: d.metadata.hasPendingWrites
-                    }
-                }));
+                const docs = mapFirestoreSnapshotDocs(snapshot);
+
+                state.pendingSnapshot = docs;
+                void drainCollectionSnapshotQueue(state, dotnetHelper);
+            },
+            (error) => {
+                if (!state.alive) {
+                    return;
+                }
+
+                void safeInvokeDotNet(dotnetHelper, 'OnSnapshotError', {
+                    code: error.code,
+                    message: error.message
+                });
+            }
+        );
+
+        state.unsubscribe = unsubscribe;
+        firestoreSubscriptions.set(subscriptionId, state);
+        return { success: true, data: { subscriptionId } };
+    } catch (error) {
+        return { success: false, error: { code: error.code, message: error.message } };
+    }
+}
+
+export async function firestoreSubscribeCollectionGroup(collectionId, queryParams, dotnetHelper) {
+    const { collectionGroup, query, where, orderBy, limit, startAt, startAfter, onSnapshot } =
+        await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js');
+    try {
+        let q = collectionGroup(firebaseFirestore, collectionId);
+
+        if (queryParams) {
+            const constraints = buildFirestoreQueryConstraints(queryParams, { where, orderBy, limit, startAt, startAfter });
+
+            if (constraints.length > 0) {
+                q = query(q, ...constraints);
+            }
+        }
+
+        const subscriptionId = ++subscriptionIdCounter;
+        const state = createFirestoreSubscriptionState(null);
+
+        const unsubscribe = onSnapshot(q,
+            (snapshot) => {
+                if (!state.alive) {
+                    return;
+                }
+
+                const docs = mapFirestoreSnapshotDocs(snapshot);
 
                 state.pendingSnapshot = docs;
                 void drainCollectionSnapshotQueue(state, dotnetHelper);
@@ -1608,7 +1661,15 @@ function isLocalDevelopment() {
 }
 
 export async function initializeAppCheck(options) {
-    const { initializeAppCheck, ReCaptchaV3Provider, ReCaptchaEnterpriseProvider, CustomProvider } = await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-app-check.js');
+    let initializeAppCheck;
+    let ReCaptchaV3Provider;
+    let ReCaptchaEnterpriseProvider;
+    let CustomProvider;
+    try {
+        ({ initializeAppCheck, ReCaptchaV3Provider, ReCaptchaEnterpriseProvider, CustomProvider } = await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-app-check.js'));
+    } catch (error) {
+        return { success: false, error: { code: 'appCheck/import-failed', message: error?.message || String(error) } };
+    }
     try {
         const appCheckOptions = {};
 
@@ -1680,7 +1741,12 @@ export async function appCheckActivate() {
 }
 
 export async function appCheckGetToken(forceRefresh) {
-    const { getToken } = await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-app-check.js');
+    let getToken;
+    try {
+        ({ getToken } = await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-app-check.js'));
+    } catch (error) {
+        return { success: false, error: { code: 'appCheck/import-failed', message: error?.message || String(error) } };
+    }
     try {
         if (!firebaseAppCheck) {
             return { success: false, error: { code: 'appCheck/not-initialized', message: 'App Check not initialized' } };
@@ -1709,7 +1775,12 @@ let appCheckSubscriptions = new Map();
 let appCheckSubscriptionCounter = 0;
 
 export async function appCheckOnTokenChanged(dotnetHelper) {
-    const { onTokenChanged } = await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-app-check.js');
+    let onTokenChanged;
+    try {
+        ({ onTokenChanged } = await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-app-check.js'));
+    } catch (error) {
+        return { success: false, error: { code: 'appCheck/import-failed', message: error?.message || String(error) } };
+    }
     try {
         if (!firebaseAppCheck) {
             return { success: false, error: { code: 'appCheck/not-initialized', message: 'App Check not initialized' } };
@@ -1720,7 +1791,7 @@ export async function appCheckOnTokenChanged(dotnetHelper) {
             dotnetHelper.invokeMethodAsync('OnTokenChanged', {
                 token: tokenResult.token,
                 expireTimeMillis: tokenResult.expireTimeMillis || (Date.now() + (30 * 60 * 1000))
-            });
+            }).catch(() => { /* ignore disposed interop */ });
         });
 
         appCheckSubscriptions.set(subscriptionId, unsubscribe);

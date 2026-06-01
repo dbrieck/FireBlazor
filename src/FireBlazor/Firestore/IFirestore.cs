@@ -4,8 +4,24 @@ namespace FireBlazor;
 public interface IFirestore
 {
     ICollectionReference<T> Collection<T>(string path) where T : class;
+    ICollectionGroupReference<T> CollectionGroup<T>(string collectionId) where T : class;
     Task<Result<Unit>> BatchAsync(Action<IWriteBatch> operations);
     Task<Result<T>> TransactionAsync<T>(Func<ITransaction, Task<T>> operations);
+}
+
+/// <summary>
+/// Read-only query surface for Firestore collection-group queries.
+/// </summary>
+public interface ICollectionGroupReference<T> where T : class
+{
+    ICollectionGroupReference<T> Where(System.Linq.Expressions.Expression<Func<T, bool>> predicate);
+    ICollectionGroupReference<T> OrderBy<TKey>(System.Linq.Expressions.Expression<Func<T, TKey>> keySelector);
+    ICollectionGroupReference<T> OrderByDescending<TKey>(System.Linq.Expressions.Expression<Func<T, TKey>> keySelector);
+    ICollectionGroupReference<T> Take(int count);
+    ICollectionGroupReference<T> StartAt(params object[] fieldValues);
+    ICollectionGroupReference<T> StartAfter(params object[] fieldValues);
+    Task<Result<IReadOnlyList<DocumentSnapshot<T>>>> GetAsync();
+    Func<ValueTask> OnSnapshot(Action<IReadOnlyList<DocumentSnapshot<T>>> onNext, Action<Exception>? onError = null);
 }
 
 public interface ICollectionReference<T> where T : class

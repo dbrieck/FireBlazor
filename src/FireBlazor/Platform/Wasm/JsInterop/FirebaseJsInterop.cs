@@ -175,6 +175,12 @@ internal sealed class FirebaseJsInterop : IAsyncDisposable
         return await module.InvokeAsync<JsResult<JsonElement>>("firestoreQuery", path, queryParams);
     }
 
+    public async Task<JsResult<JsonElement>> FirestoreCollectionGroupQueryAsync(string collectionId, object queryParams)
+    {
+        var module = await GetModuleAsync();
+        return await module.InvokeAsync<JsResult<JsonElement>>("firestoreCollectionGroupQuery", collectionId, queryParams);
+    }
+
     // Firestore Real-time Subscriptions
     public async Task<JsResult<JsSubscriptionResult>> FirestoreSubscribeDocumentAsync(
         string path,
@@ -193,6 +199,16 @@ internal sealed class FirebaseJsInterop : IAsyncDisposable
         var module = await GetModuleAsync();
         return await module.InvokeAsync<JsResult<JsSubscriptionResult>>(
             "firestoreSubscribeCollection", path, queryParams, callbackRef);
+    }
+
+    public async Task<JsResult<JsSubscriptionResult>> FirestoreSubscribeCollectionGroupAsync(
+        string collectionId,
+        object? queryParams,
+        DotNetObjectReference<ISnapshotCallback> callbackRef)
+    {
+        var module = await GetModuleAsync();
+        return await module.InvokeAsync<JsResult<JsSubscriptionResult>>(
+            "firestoreSubscribeCollectionGroup", collectionId, queryParams, callbackRef);
     }
 
     public async Task<JsResult<object>> FirestoreUnsubscribeAsync(int subscriptionId)

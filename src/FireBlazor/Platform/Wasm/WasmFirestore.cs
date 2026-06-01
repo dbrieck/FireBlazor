@@ -21,6 +21,19 @@ internal sealed class WasmFirestore : IFirestore
         return new WasmCollectionReference<T>(_jsInterop, path);
     }
 
+    public ICollectionGroupReference<T> CollectionGroup<T>(string collectionId) where T : class
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(collectionId);
+        if (collectionId.Contains('/'))
+        {
+            throw new ArgumentException(
+                "Collection group id must be a single collection segment, not a path.",
+                nameof(collectionId));
+        }
+
+        return new WasmCollectionGroupReference<T>(_jsInterop, collectionId);
+    }
+
     public async Task<Result<Unit>> BatchAsync(Action<IWriteBatch> operations)
     {
         var batch = new WasmWriteBatch(_jsInterop);
