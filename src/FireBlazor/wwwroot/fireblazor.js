@@ -1696,7 +1696,11 @@ export async function appCheckGetToken(forceRefresh) {
             }
         };
     } catch (error) {
-        return { success: false, error: { code: error.code || 'appCheck/unknown', message: error.message } };
+        const message = error?.message || String(error);
+        const code = (message.includes('recaptcha') || message.includes('Recaptcha'))
+            ? 'appCheck/recaptcha-error'
+            : (error.code || 'appCheck/unknown');
+        return { success: false, error: { code, message } };
     }
 }
 
