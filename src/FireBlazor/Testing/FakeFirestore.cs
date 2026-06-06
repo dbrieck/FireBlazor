@@ -842,6 +842,12 @@ internal sealed class FakeCollectionGroupReference<T> : ICollectionGroupReferenc
             _limit, _startAt, _startAfter);
     }
 
+    public ICollectionGroupReference<T> OrderByDocumentId()
+    {
+        return new FakeCollectionGroupReference<T>(_firestore, _collectionId, _wherePredicates, [.. _orderByFields, ("__documentId__", false)],
+            _limit, _startAt, _startAfter);
+    }
+
     public ICollectionGroupReference<T> Take(int count)
     {
         return new FakeCollectionGroupReference<T>(_firestore, _collectionId, _wherePredicates, _orderByFields,
@@ -937,6 +943,24 @@ internal sealed class FakeCollectionGroupReference<T> : ICollectionGroupReferenc
 
         foreach (var (field, descending) in _orderByFields)
         {
+            if (string.Equals(field, "__documentId__", StringComparison.Ordinal))
+            {
+                if (ordered == null)
+                {
+                    ordered = descending
+                        ? docs.OrderByDescending(d => d.Path, StringComparer.Ordinal)
+                        : docs.OrderBy(d => d.Path, StringComparer.Ordinal);
+                }
+                else
+                {
+                    ordered = descending
+                        ? ordered.ThenByDescending(d => d.Path, StringComparer.Ordinal)
+                        : ordered.ThenBy(d => d.Path, StringComparer.Ordinal);
+                }
+
+                continue;
+            }
+
             var prop = typeof(T).GetProperty(field);
             if (prop == null) continue;
 

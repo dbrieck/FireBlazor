@@ -78,6 +78,18 @@ internal sealed class WasmCollectionGroupReference<T> : ICollectionGroupReferenc
             _startAt, _startAfter);
     }
 
+    public ICollectionGroupReference<T> OrderByDocumentId()
+    {
+        const string DocumentIdField = "__documentId__";
+        var newOrderBy = new List<OrderByClause>(_orderByClauses)
+        {
+            new(DocumentIdField, "asc")
+        };
+
+        return new WasmCollectionGroupReference<T>(_jsInterop, _collectionId, _whereClauses, newOrderBy, _limit,
+            _startAt, _startAfter);
+    }
+
     public ICollectionGroupReference<T> Take(int count)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(count);

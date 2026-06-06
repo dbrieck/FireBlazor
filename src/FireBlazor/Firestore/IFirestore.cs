@@ -17,6 +17,8 @@ public interface ICollectionGroupReference<T> where T : class
     ICollectionGroupReference<T> Where(System.Linq.Expressions.Expression<Func<T, bool>> predicate);
     ICollectionGroupReference<T> OrderBy<TKey>(System.Linq.Expressions.Expression<Func<T, TKey>> keySelector);
     ICollectionGroupReference<T> OrderByDescending<TKey>(System.Linq.Expressions.Expression<Func<T, TKey>> keySelector);
+    /// <summary>Deterministic order by Firestore document id (<c>FieldPath.documentId()</c>).</summary>
+    ICollectionGroupReference<T> OrderByDocumentId();
     ICollectionGroupReference<T> Take(int count);
     ICollectionGroupReference<T> StartAt(params object[] fieldValues);
     ICollectionGroupReference<T> StartAfter(params object[] fieldValues);

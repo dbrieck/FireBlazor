@@ -583,7 +583,11 @@ function buildFirestoreQueryConstraints(queryParams, constraintFns) {
     }
     if (queryParams.orderBy) {
         for (const o of queryParams.orderBy) {
-            constraints.push(constraintFns.orderBy(o.field, o.direction || 'asc'));
+            if (o.field === '__documentId__' && constraintFns.documentId) {
+                constraints.push(constraintFns.orderBy(constraintFns.documentId(), o.direction || 'asc'));
+            } else {
+                constraints.push(constraintFns.orderBy(o.field, o.direction || 'asc'));
+            }
         }
     }
     if (queryParams.startAt) {
@@ -619,11 +623,11 @@ function mapFirestoreSnapshotDocs(snapshot) {
 }
 
 export async function firestoreCollectionGroupQuery(collectionId, queryParams) {
-    const { collectionGroup, query, where, orderBy, limit, startAt, startAfter, getDocs } =
+    const { collectionGroup, query, where, orderBy, limit, startAt, startAfter, getDocs, documentId } =
         await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js');
     try {
         let q = collectionGroup(firebaseFirestore, collectionId);
-        const constraints = buildFirestoreQueryConstraints(queryParams, { where, orderBy, limit, startAt, startAfter });
+        const constraints = buildFirestoreQueryConstraints(queryParams, { where, orderBy, limit, startAt, startAfter, documentId });
         q = query(q, ...constraints);
         const snapshot = await getDocs(q);
 
@@ -848,13 +852,13 @@ export async function firestoreSubscribeCollection(path, queryParams, dotnetHelp
 }
 
 export async function firestoreSubscribeCollectionGroup(collectionId, queryParams, dotnetHelper) {
-    const { collectionGroup, query, where, orderBy, limit, startAt, startAfter, onSnapshot } =
+    const { collectionGroup, query, where, orderBy, limit, startAt, startAfter, onSnapshot, documentId } =
         await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js');
     try {
         let q = collectionGroup(firebaseFirestore, collectionId);
 
         if (queryParams) {
-            const constraints = buildFirestoreQueryConstraints(queryParams, { where, orderBy, limit, startAt, startAfter });
+            const constraints = buildFirestoreQueryConstraints(queryParams, { where, orderBy, limit, startAt, startAfter, documentId });
 
             if (constraints.length > 0) {
                 q = query(q, ...constraints);
