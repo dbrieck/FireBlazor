@@ -1701,7 +1701,11 @@ export async function initializeAppCheck(options) {
         // Never set FIREBASE_APPCHECK_DEBUG_TOKEN together with reCAPTCHA: the SDK still calls
         // exchangeDebugToken (403 until the UUID is registered) even though ReCaptchaV3Provider is used.
         if (shouldEnableDebug && !hasRecaptchaProvider) {
-            self.FIREBASE_APPCHECK_DEBUG_TOKEN = debugToken || true;
+            const presetDebugToken = typeof self !== 'undefined' ? self.FIREBASE_APPCHECK_DEBUG_TOKEN : undefined;
+            const hasPresetStringToken = typeof presetDebugToken === 'string' && presetDebugToken.length > 0;
+            if (!hasPresetStringToken) {
+                self.FIREBASE_APPCHECK_DEBUG_TOKEN = debugToken || true;
+            }
             if (isLocalDevelopment()) {
                 console.info('[FireBlazor] App Check: debug token flow (no reCAPTCHA). Register the token from the console in Firebase → App Check → Manage debug tokens.');
             }
