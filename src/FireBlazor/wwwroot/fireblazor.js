@@ -553,10 +553,10 @@ export async function firestoreRunTransactionWithCallback(readPaths, dotnetCallb
 }
 
 export async function firestoreQuery(path, queryParams) {
-    const { collection, query, where, orderBy, limit, startAt, startAfter, endAt, endBefore, getDocs } = await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js');
+    const { collection, query, where, orderBy, limit, startAt, startAfter, endAt, endBefore, getDocs, documentId } = await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js');
     try {
         let q = collection(firebaseFirestore, path);
-        const constraints = buildFirestoreQueryConstraints(queryParams, { where, orderBy, limit, startAt, startAfter, endAt, endBefore });
+        const constraints = buildFirestoreQueryConstraints(queryParams, { where, orderBy, limit, startAt, startAfter, endAt, endBefore, documentId });
 
         q = query(q, ...constraints);
         const snapshot = await getDocs(q);
@@ -805,12 +805,12 @@ export async function firestoreSubscribeDocument(path, dotnetHelper) {
 }
 
 export async function firestoreSubscribeCollection(path, queryParams, dotnetHelper) {
-    const { collection, query, where, orderBy, limit, startAt, startAfter, onSnapshot } = await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js');
+    const { collection, query, where, orderBy, limit, startAt, startAfter, onSnapshot, documentId } = await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js');
     try {
         let q = collection(firebaseFirestore, path);
 
         if (queryParams) {
-            const constraints = buildFirestoreQueryConstraints(queryParams, { where, orderBy, limit, startAt, startAfter });
+            const constraints = buildFirestoreQueryConstraints(queryParams, { where, orderBy, limit, startAt, startAfter, documentId });
 
             if (constraints.length > 0) {
                 q = query(q, ...constraints);
