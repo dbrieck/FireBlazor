@@ -530,6 +530,12 @@ internal sealed class FakeCollectionReference<T> : ICollectionReference<T> where
             _limit, _skip, _startAt, _startAfter, _endAt, _endBefore);
     }
 
+    public ICollectionReference<T> OrderByDocumentId()
+    {
+        return new FakeCollectionReference<T>(_firestore, _path, _wherePredicates, [.. _orderByFields, ("__documentId__", false)],
+            _limit, _skip, _startAt, _startAfter, _endAt, _endBefore);
+    }
+
     public ICollectionReference<T> Take(int count)
     {
         return new FakeCollectionReference<T>(_firestore, _path, _wherePredicates, _orderByFields,
@@ -609,6 +615,26 @@ internal sealed class FakeCollectionReference<T> : ICollectionReference<T> where
 
         foreach (var (field, descending) in _orderByFields)
         {
+            if (string.Equals(field, "__documentId__", StringComparison.Ordinal))
+            {
+                string DocId(string path) => path.Split('/', StringSplitOptions.RemoveEmptyEntries)[^1];
+
+                if (ordered == null)
+                {
+                    ordered = descending
+                        ? docs.OrderByDescending(d => DocId(d.Path), StringComparer.Ordinal)
+                        : docs.OrderBy(d => DocId(d.Path), StringComparer.Ordinal);
+                }
+                else
+                {
+                    ordered = descending
+                        ? ordered.ThenByDescending(d => DocId(d.Path), StringComparer.Ordinal)
+                        : ordered.ThenBy(d => DocId(d.Path), StringComparer.Ordinal);
+                }
+
+                continue;
+            }
+
             var prop = typeof(T).GetProperty(field);
             if (prop == null) continue;
 

@@ -31,6 +31,8 @@ public interface ICollectionReference<T> where T : class
     ICollectionReference<T> Where(System.Linq.Expressions.Expression<Func<T, bool>> predicate);
     ICollectionReference<T> OrderBy<TKey>(System.Linq.Expressions.Expression<Func<T, TKey>> keySelector);
     ICollectionReference<T> OrderByDescending<TKey>(System.Linq.Expressions.Expression<Func<T, TKey>> keySelector);
+    /// <summary>Deterministic order by Firestore document id (<c>FieldPath.documentId()</c>).</summary>
+    ICollectionReference<T> OrderByDocumentId();
     ICollectionReference<T> Take(int count);
     ICollectionReference<T> Skip(int count);
     IDocumentReference<T> Document(string id);
