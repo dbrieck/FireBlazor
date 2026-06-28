@@ -15,6 +15,7 @@ internal static class FirestoreJsonOptions
         {
             new FieldValueConverter(),
             new FirestoreTimestampConverter(),
+            new FirestoreCloudTimestampJsonConverter(),
             new FirestoreLenientNullableStringJsonConverter(),
         }
     };
