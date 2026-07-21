@@ -34,6 +34,17 @@ internal sealed class WasmFirestore : IFirestore
         return new WasmCollectionGroupReference<T>(_jsInterop, collectionId);
     }
 
+    public async Task<Result<Unit>> ClearPersistenceAsync()
+    {
+        var result = await _jsInterop.ClearFirestorePersistenceAsync();
+        if (!result.Success)
+            return Result<Unit>.Failure(new FirebaseError(
+                result.Error?.Code ?? "firestore/clear-persistence-failed",
+                result.Error?.Message ?? "Failed to clear Firestore persistence."));
+
+        return Unit.Value;
+    }
+
     public async Task<Result<Unit>> BatchAsync(Action<IWriteBatch> operations)
     {
         var batch = new WasmWriteBatch(_jsInterop);

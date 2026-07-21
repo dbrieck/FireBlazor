@@ -191,6 +191,16 @@ export async function signOut() {
     const { signOut: fbSignOut } = await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js');
     try {
         await fbSignOut(firebaseAuth);
+        // When the persistent local cache is enabled, clear it on sign-out so a prior
+        // account's data does not survive an in-place (non-reloaded) account switch.
+        // Best-effort: never fail sign-out because cache clearing was rejected.
+        if (firestoreInitOptions?.enablePersistentLocalCache) {
+            try {
+                await clearFirestorePersistence();
+            } catch (err) {
+                console.warn('[FireBlazor] Failed to clear Firestore persistence on sign-out:', err);
+            }
+        }
         return { success: true };
     } catch (error) {
         return { success: false, error: { code: error.code, message: error.message } };
@@ -260,9 +270,52 @@ function mapUser(user) {
 
 // ============ FIRESTORE ============
 
+// Retained so Firestore can be re-created with the same settings after
+// clearFirestorePersistence() terminates the instance on sign-out.
+let firestoreInitOptions = null;
+
+// Builds a Firestore instance for the current app, honoring the persistent local
+// cache opt-in. When persistent cache is requested we must call the SDK's
+// initializeFirestore(app, settings) (aliased here to avoid colliding with this
+// module's exported initializeFirestore) instead of getFirestore(app), since the
+// localCache setting can only be supplied at initialization time.
+async function createFirestoreInstance(firestoreModule, options) {
+    const {
+        getFirestore,
+        initializeFirestore: initializeFirestoreWithSettings,
+        persistentLocalCache,
+        persistentMultipleTabManager,
+        persistentSingleTabManager
+    } = firestoreModule;
+
+    // Persistent cache and the emulator don't mix; skip it when an emulator is configured.
+    if (options?.enablePersistentLocalCache && !options?.emulatorHost) {
+        try {
+            const tabManager = options?.multiTab === false
+                ? persistentSingleTabManager()
+                : persistentMultipleTabManager();
+            const cacheSettings = { tabManager };
+            if (options?.cacheSizeBytes !== null && options?.cacheSizeBytes !== undefined) {
+                cacheSettings.cacheSizeBytes = options.cacheSizeBytes;
+            }
+            return initializeFirestoreWithSettings(firebaseApp, {
+                localCache: persistentLocalCache(cacheSettings)
+            });
+        } catch (err) {
+            // Falls through to a default in-memory instance so the app still works.
+            console.warn('[FireBlazor] Persistent local cache init failed; falling back to default Firestore:', err);
+        }
+    }
+
+    return getFirestore(firebaseApp);
+}
+
 export async function initializeFirestore(options) {
-    const { getFirestore, enableIndexedDbPersistence, connectFirestoreEmulator } = await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js');
-    firebaseFirestore = getFirestore(firebaseApp);
+    const firestoreModule = await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js');
+    const { enableIndexedDbPersistence, connectFirestoreEmulator } = firestoreModule;
+
+    firestoreInitOptions = options ?? null;
+    firebaseFirestore = await createFirestoreInstance(firestoreModule, options);
 
     if (options?.emulatorHost) {
         const parsed = parseEmulatorHost(options.emulatorHost);
@@ -277,7 +330,9 @@ export async function initializeFirestore(options) {
         }
     }
 
-    if (options?.enableOfflinePersistence && !options?.emulatorHost) {
+    // Legacy IndexedDB persistence path. Skipped when the modern persistent local
+    // cache is enabled (the localCache setting already handles it) or an emulator is used.
+    if (options?.enableOfflinePersistence && !options?.enablePersistentLocalCache && !options?.emulatorHost) {
         try {
             await enableIndexedDbPersistence(firebaseFirestore);
         } catch (err) {
@@ -285,6 +340,48 @@ export async function initializeFirestore(options) {
         }
     }
     return true;
+}
+
+// Terminates Firestore, clears its IndexedDB persistent cache from disk, then
+// re-initializes Firestore with the original settings so it stays usable. Used on
+// sign-out so a prior account's cached data does not survive an in-place account switch.
+export async function clearFirestorePersistence() {
+    // Nothing to clear unless the persistent cache was actually applied. It is skipped when
+    // an emulator is configured, so guard on that too (re-creating would drop the emulator link).
+    if (!firebaseFirestore
+        || !firestoreInitOptions?.enablePersistentLocalCache
+        || firestoreInitOptions?.emulatorHost) {
+        return { success: true };
+    }
+
+    const firestoreModule = await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js');
+    const { terminate, clearIndexedDbPersistence } = firestoreModule;
+
+    let clearError = null;
+    try {
+        // Must terminate before clearing; clearIndexedDbPersistence rejects on a live instance.
+        await terminate(firebaseFirestore);
+        await clearIndexedDbPersistence(firebaseFirestore);
+    } catch (err) {
+        // failed-precondition here typically means another tab still holds the cache open.
+        clearError = err;
+        console.warn('[FireBlazor] Failed to clear Firestore persistence:', err);
+    }
+
+    // Re-create Firestore (terminate removes the instance from the app) so later calls work.
+    try {
+        firebaseFirestore = await createFirestoreInstance(firestoreModule, firestoreInitOptions);
+    } catch (err) {
+        return { success: false, error: { code: 'firestore/reinit-failed', message: err?.message || String(err) } };
+    }
+
+    if (clearError) {
+        return {
+            success: false,
+            error: { code: clearError.code || 'firestore/clear-failed', message: clearError.message || String(clearError) }
+        };
+    }
+    return { success: true };
 }
 
 export async function firestoreGet(path) {

@@ -129,8 +129,21 @@ internal sealed class FirebaseJsInterop : IAsyncDisposable
         await module.InvokeVoidAsync("initializeFirestore", new
         {
             enableOfflinePersistence = options?.OfflinePersistenceEnabled ?? false,
+            enablePersistentLocalCache = options?.PersistentLocalCacheEnabled ?? false,
+            multiTab = options?.MultiTabEnabled ?? true,
+            cacheSizeBytes = options?.CacheSizeBytes,
             emulatorHost
         });
+    }
+
+    /// <summary>
+    /// Terminates the active Firestore instance, clears its IndexedDB persistent cache, and
+    /// re-initializes Firestore so it stays usable after an in-place sign-out.
+    /// </summary>
+    public async Task<JsResult<object>> ClearFirestorePersistenceAsync()
+    {
+        var module = await GetModuleAsync();
+        return await module.InvokeAsync<JsResult<object>>("clearFirestorePersistence");
     }
 
     public async Task<JsResult<JsonElement>> FirestoreGetAsync(string path)

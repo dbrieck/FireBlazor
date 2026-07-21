@@ -251,6 +251,37 @@ var total = await Firebase.Firestore.Collection<Order>("orders").Aggregate().Sum
 var avg = await Firebase.Firestore.Collection<Product>("products").Aggregate().AverageAsync("price");
 ```
 
+### Offline Persistence (IndexedDB Cache)
+
+By default Firestore uses an in-memory cache, so cached documents are lost on a full page
+reload or cold app start. Opt into the IndexedDB-backed **persistent local cache** so cached
+data survives reloads and cold starts — re-subscriptions then paint warm data from cache before
+the network read completes, and reads keep working while offline.
+
+```csharp
+builder.Services.AddFirebase(options => options
+    .WithProject("your-project-id")
+    // Persistent, multi-tab cache (persistentLocalCache + persistentMultipleTabManager)
+    .UseFirestore(fs => fs.UsePersistentLocalCache()));
+
+// Single-tab cache with a custom size limit:
+//   .UseFirestore(fs => fs.UsePersistentLocalCache(multiTab: false, cacheSizeBytes: 50 * 1024 * 1024));
+```
+
+Because the cache lives on disk, a prior account's data would otherwise survive an in-place
+(non-reloaded) sign-out. When persistent local cache is enabled, FireBlazor **clears the cache
+automatically on sign-out** (`terminate` + `clearIndexedDbPersistence`, then re-initializes
+Firestore so it stays usable). You can also clear it explicitly:
+
+```csharp
+await Firebase.Firestore.ClearPersistenceAsync();
+```
+
+> **Multi-tab note:** clearing IndexedDB requires that no other tab holds the cache open. If
+> another tab is active, the clear is rejected (`failed-precondition`) and reported via the
+> returned `Result`; sign-out itself still succeeds. Persistent cache is skipped automatically
+> when a Firestore emulator is configured.
+
 ## Cloud Storage
 
 ### Upload Files

@@ -7,6 +7,18 @@ public interface IFirestore
     ICollectionGroupReference<T> CollectionGroup<T>(string collectionId) where T : class;
     Task<Result<Unit>> BatchAsync(Action<IWriteBatch> operations);
     Task<Result<T>> TransactionAsync<T>(Func<ITransaction, Task<T>> operations);
+
+    /// <summary>
+    /// Terminates Firestore, clears the IndexedDB persistent local cache from disk, and
+    /// re-initializes Firestore so it remains usable. Call this on sign-out when persistent
+    /// local cache is enabled so a prior account's cached data does not survive an in-place
+    /// (non-reloaded) account switch.
+    /// <para>
+    /// Best-effort: if another tab still holds the cache open, the clear may be rejected with a
+    /// failed-precondition error. A no-op when persistent local cache was not enabled.
+    /// </para>
+    /// </summary>
+    Task<Result<Unit>> ClearPersistenceAsync();
 }
 
 /// <summary>
