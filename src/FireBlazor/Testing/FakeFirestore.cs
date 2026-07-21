@@ -51,6 +51,20 @@ public sealed class FakeFirestore : IFirestore
         return new FakeCollectionGroupReference<T>(this, collectionId);
     }
 
+    /// <summary>Number of times <see cref="ClearPersistenceAsync"/> has been called.</summary>
+    public int ClearPersistenceCallCount { get; private set; }
+
+    public Task<Result<Unit>> ClearPersistenceAsync()
+    {
+        ClearPersistenceCallCount++;
+
+        if (TryConsumeSimulatedError(out var error))
+            return Task.FromResult(Result<Unit>.Failure(error!));
+
+        _documents.Clear();
+        return Task.FromResult(Result<Unit>.Success(Unit.Value));
+    }
+
     public Task<Result<Unit>> BatchAsync(Action<IWriteBatch> operations)
     {
         if (TryConsumeSimulatedError(out var error))

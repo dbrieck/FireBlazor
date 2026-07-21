@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Firestore persistent local cache** - Opt in via `UseFirestore(fs => fs.UsePersistentLocalCache())`
+  to enable Firestore's IndexedDB-backed cache (`persistentLocalCache` +
+  `persistentMultipleTabManager`). Cached documents survive full page reloads and cold starts, so
+  re-subscriptions serve warm data from cache and reads keep working offline. Supports single-tab
+  mode and a custom cache size. Off by default.
+- **`IFirestore.ClearPersistenceAsync()`** - Terminates Firestore, clears the IndexedDB cache from
+  disk, and re-initializes Firestore. Called automatically on sign-out when persistent local cache
+  is enabled so a prior account's data does not survive an in-place account switch.
+
 ### Fixed
 
 - **`in` / `not-in` queries with array collections** - `.Where(x => array.Contains(x.Field))`

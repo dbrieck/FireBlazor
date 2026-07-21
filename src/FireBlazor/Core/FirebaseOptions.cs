@@ -188,11 +188,66 @@ public sealed class AuthOptions
 
 public sealed class FirestoreOptions
 {
+    /// <summary>
+    /// Whether legacy IndexedDB offline persistence is enabled via the deprecated
+    /// <c>enableIndexedDbPersistence()</c> API. Prefer <see cref="UsePersistentLocalCache"/>.
+    /// </summary>
     public bool OfflinePersistenceEnabled { get; private set; }
 
+    /// <summary>
+    /// Whether the modern IndexedDB-backed persistent local cache is enabled at
+    /// <c>initializeFirestore()</c> time.
+    /// </summary>
+    public bool PersistentLocalCacheEnabled { get; private set; }
+
+    /// <summary>
+    /// Whether the persistent local cache is shared across browser tabs
+    /// (<c>persistentMultipleTabManager()</c>). Only meaningful when
+    /// <see cref="PersistentLocalCacheEnabled"/> is <c>true</c>. Defaults to <c>true</c>.
+    /// </summary>
+    public bool MultiTabEnabled { get; private set; } = true;
+
+    /// <summary>
+    /// Optional cache size limit in bytes for the persistent local cache. When null the
+    /// Firestore SDK default (40 MB) is used. Pass a negative value for unlimited.
+    /// </summary>
+    public long? CacheSizeBytes { get; private set; }
+
+    /// <summary>
+    /// Enables the legacy IndexedDB offline persistence layer. Uses the deprecated
+    /// Firestore <c>enableIndexedDbPersistence()</c> API and is kept for backwards
+    /// compatibility. Prefer <see cref="UsePersistentLocalCache"/> for new code.
+    /// </summary>
     public FirestoreOptions EnableOfflinePersistence()
     {
         OfflinePersistenceEnabled = true;
+        return this;
+    }
+
+    /// <summary>
+    /// Opts into Firestore's modern IndexedDB-backed persistent local cache. Cached documents
+    /// then survive full page reloads and cold app starts, so re-subscriptions serve warm data
+    /// from cache before the network read completes, and reads keep working while offline.
+    /// <para>
+    /// Applied at <c>initializeFirestore()</c> time via
+    /// <c>persistentLocalCache({ tabManager: persistentMultipleTabManager() })</c>. When persistent
+    /// cache is enabled, FireBlazor clears the cache on sign-out so a prior account's data does not
+    /// survive an in-place (non-reloaded) account switch.
+    /// </para>
+    /// </summary>
+    /// <param name="multiTab">
+    /// When <c>true</c> (default) the cache is shared across tabs via
+    /// <c>persistentMultipleTabManager()</c>; when <c>false</c> a single-tab manager is used.
+    /// </param>
+    /// <param name="cacheSizeBytes">
+    /// Optional cache size limit in bytes. When null the SDK default is used. Pass a negative
+    /// value for an unlimited cache (<c>CACHE_SIZE_UNLIMITED</c>).
+    /// </param>
+    public FirestoreOptions UsePersistentLocalCache(bool multiTab = true, long? cacheSizeBytes = null)
+    {
+        PersistentLocalCacheEnabled = true;
+        MultiTabEnabled = multiTab;
+        CacheSizeBytes = cacheSizeBytes;
         return this;
     }
 }

@@ -42,6 +42,66 @@ public class ServiceCollectionExtensionsTests
     }
 
     [Fact]
+    public void UseFirestore_DefaultsToNoPersistentLocalCache()
+    {
+        var services = new ServiceCollection();
+
+        services.AddFirebase(options => options
+            .WithProject("my-project")
+            .UseFirestore());
+
+        var options = services.BuildServiceProvider().GetRequiredService<FirebaseOptions>();
+
+        Assert.NotNull(options.FirestoreOptions);
+        Assert.False(options.FirestoreOptions!.PersistentLocalCacheEnabled);
+        Assert.False(options.FirestoreOptions.OfflinePersistenceEnabled);
+    }
+
+    [Fact]
+    public void UseFirestore_UsePersistentLocalCache_EnablesMultiTabByDefault()
+    {
+        var services = new ServiceCollection();
+
+        services.AddFirebase(options => options
+            .WithProject("my-project")
+            .UseFirestore(fs => fs.UsePersistentLocalCache()));
+
+        var options = services.BuildServiceProvider().GetRequiredService<FirebaseOptions>();
+
+        Assert.NotNull(options.FirestoreOptions);
+        Assert.True(options.FirestoreOptions!.PersistentLocalCacheEnabled);
+        Assert.True(options.FirestoreOptions.MultiTabEnabled);
+        Assert.Null(options.FirestoreOptions.CacheSizeBytes);
+    }
+
+    [Fact]
+    public void UseFirestore_UsePersistentLocalCache_HonorsSingleTabAndCacheSize()
+    {
+        var services = new ServiceCollection();
+
+        services.AddFirebase(options => options
+            .WithProject("my-project")
+            .UseFirestore(fs => fs.UsePersistentLocalCache(multiTab: false, cacheSizeBytes: 5_000_000)));
+
+        var options = services.BuildServiceProvider().GetRequiredService<FirebaseOptions>();
+
+        Assert.True(options.FirestoreOptions!.PersistentLocalCacheEnabled);
+        Assert.False(options.FirestoreOptions.MultiTabEnabled);
+        Assert.Equal(5_000_000, options.FirestoreOptions.CacheSizeBytes);
+    }
+
+    [Fact]
+    public async Task FakeFirestore_ClearPersistenceAsync_SucceedsAndCounts()
+    {
+        var firestore = new FireBlazor.Testing.FakeFirestore();
+
+        var result = await firestore.ClearPersistenceAsync();
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(1, firestore.ClearPersistenceCallCount);
+    }
+
+    [Fact]
     public void AddFirebase_ThrowsWithoutProjectId()
     {
         var services = new ServiceCollection();
