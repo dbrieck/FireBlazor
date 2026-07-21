@@ -329,45 +329,73 @@ internal sealed class WhereExpressionVisitor : ExpressionVisitor
 
     private void HandleContainsMethod(MethodCallExpression node, bool isNegated)
     {
-        // Case 1: x.Tags.Contains("value") -> array-contains
-        // (instance method on IEnumerable<T>)
-        if (node.Object is MemberExpression arrayMember && node.Arguments.Count == 1)
+        // Resolve the (collection, value) operands regardless of which Contains overload the
+        // compiler bound to:
+        //   - instance method:            list.Contains(value)                 -> node.Object is the collection
+        //   - Enumerable.Contains:        Enumerable.Contains(source, value)   -> static, 2 args
+        //   - MemoryExtensions.Contains:  arrays bind to the span overload, wrapping the array in
+        //                                 an implicit ReadOnlySpan<T> conversion around arg[0]
+        Expression? collectionExpr;
+        Expression? valueExpr;
+
+        if (node.Object is not null && node.Arguments.Count == 1)
         {
-            var field = CamelCaseHelper.ToCamelCase(arrayMember.Member.Name);
-            var value = EvaluateExpression(node.Arguments[0]);
+            // Instance method: collection.Contains(value)
+            collectionExpr = node.Object;
+            valueExpr = node.Arguments[0];
+        }
+        else if (node.Object is null && node.Arguments.Count >= 2)
+        {
+            // Static extension: Contains(source, value). Unwrap any implicit span/reference
+            // conversion so the source is the underlying array/collection expression.
+            collectionExpr = UnwrapConversions(node.Arguments[0]);
+            valueExpr = node.Arguments[1];
+        }
+        else
+        {
+            return;
+        }
+
+        // Case 1: x.Field.Contains(value) -> array-contains (the collection is a document field).
+        if (collectionExpr is MemberExpression collectionMember
+            && collectionMember.Expression is ParameterExpression)
+        {
+            var field = CamelCaseHelper.ToCamelCase(collectionMember.Member.Name);
+            var value = EvaluateExpression(valueExpr);
             Clauses.Add(new WhereClause(field, "array-contains", value));
             return;
         }
 
-        // Case 2: someArray.Contains(x.Property) -> in or not-in
-        // (static Enumerable.Contains or instance method where arg is member)
-        if (node.Arguments.Count >= 1)
+        // Case 2: collection.Contains(x.Field) -> in / not-in (the value is a document field).
+        if (valueExpr is MemberExpression valueMember
+            && valueMember.Expression is ParameterExpression)
         {
-            Expression? collectionExpr = null;
-            Expression? memberExpr = null;
+            var field = CamelCaseHelper.ToCamelCase(valueMember.Member.Name);
+            var collection = EvaluateExpression(collectionExpr);
+            var op = isNegated ? "not-in" : "in";
+            Clauses.Add(new WhereClause(field, op, collection));
+        }
+    }
 
-            if (node.Method.DeclaringType == typeof(Enumerable))
+    // Strips implicit conversions the compiler inserts around a Contains source argument, such as
+    // the array -> ReadOnlySpan<T> conversion (op_Implicit) used by MemoryExtensions.Contains, or
+    // Convert nodes, so the underlying array/collection expression can be evaluated directly.
+    private static Expression UnwrapConversions(Expression expr)
+    {
+        while (true)
+        {
+            if (expr is UnaryExpression { NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked } unary)
             {
-                // Static Enumerable.Contains(source, value)
-                if (node.Arguments.Count >= 2)
-                {
-                    collectionExpr = node.Arguments[0];
-                    memberExpr = node.Arguments[1];
-                }
+                expr = unary.Operand;
             }
-            else if (node.Object is not null)
+            else if (expr is MethodCallExpression { Method.Name: "op_Implicit" or "op_Explicit" } conversion
+                     && conversion.Arguments.Count == 1)
             {
-                // Instance method: collection.Contains(value)
-                collectionExpr = node.Object;
-                memberExpr = node.Arguments[0];
+                expr = conversion.Arguments[0];
             }
-
-            if (collectionExpr is not null && memberExpr is MemberExpression propMember)
+            else
             {
-                var field = CamelCaseHelper.ToCamelCase(propMember.Member.Name);
-                var collection = EvaluateExpression(collectionExpr);
-                var op = isNegated ? "not-in" : "in";
-                Clauses.Add(new WhereClause(field, op, collection));
+                return expr;
             }
         }
     }
