@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`in` / `not-in` queries with array collections** - `.Where(x => array.Contains(x.Field))`
+  where `array` is a `T[]` silently produced no filter, because arrays bind to the span-based
+  `MemoryExtensions.Contains` overload (wrapping the array in an implicit `ReadOnlySpan<T>`
+  conversion) rather than `Enumerable.Contains`. The predicate visitor now recognizes all
+  `Contains` overloads and unwraps the conversion, so array-backed `in`/`not-in` filters and
+  `array-contains` on array fields are translated correctly.
+
 ## [1.0.0] - 2025-01-15
 
 ### Added
