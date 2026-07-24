@@ -241,6 +241,26 @@ public sealed class FakeFirestore : IFirestore
                 document[fieldName] = DateTime.UtcNow.ToString("O");
                 break;
 
+            case "timestamp":
+                // Preserve seconds/nanoseconds so WASM timestamp writes round-trip in unit tests.
+                if (data is JsonObject tsObj
+                    && tsObj.TryGetPropertyValue("seconds", out var secNode)
+                    && secNode is not null)
+                {
+                    var nanos = 0;
+                    if (tsObj.TryGetPropertyValue("nanoseconds", out var nanoNode) && nanoNode is not null)
+                    {
+                        nanos = nanoNode.GetValue<int>();
+                    }
+
+                    document[fieldName] = new JsonObject
+                    {
+                        ["seconds"] = secNode.GetValue<long>(),
+                        ["nanoseconds"] = nanos,
+                    };
+                }
+                break;
+
             case "increment":
                 ApplyIncrement(document, fieldName, data);
                 break;

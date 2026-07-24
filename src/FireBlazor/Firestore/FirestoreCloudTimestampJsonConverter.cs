@@ -91,9 +91,23 @@ public sealed class FirestoreCloudTimestampJsonConverter : JsonConverter<Timesta
 
     public override void Write(Utf8JsonWriter writer, Timestamp value, JsonSerializerOptions options)
     {
+        // Emit a FieldValue-style sentinel so fireblazor.js transformFieldValues can construct a real
+        // firebase/firestore Timestamp. Plain {seconds,nanoseconds} maps are stored as maps and fail
+        // rules that require `field is timestamp` (e.g. journalEntries.date).
+        var utc = value.ToDateTime();
+        if (utc.Kind != DateTimeKind.Utc)
+        {
+            utc = DateTime.SpecifyKind(utc, DateTimeKind.Utc);
+        }
+
+        var ticks = utc.Ticks - DateTime.UnixEpoch.Ticks;
+        var seconds = ticks / TimeSpan.TicksPerSecond;
+        var nanoseconds = (int)((ticks % TimeSpan.TicksPerSecond) * 100); // 1 tick = 100 ns
+
         writer.WriteStartObject();
-        writer.WriteNumber("seconds", value.ToDateTime().Subtract(DateTime.UnixEpoch).Ticks / TimeSpan.TicksPerSecond);
-        writer.WriteNumber("nanoseconds", 0);
+        writer.WriteString("__fieldValue__", "timestamp");
+        writer.WriteNumber("seconds", seconds);
+        writer.WriteNumber("nanoseconds", nanoseconds);
         writer.WriteEndObject();
     }
 }
