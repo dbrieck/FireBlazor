@@ -7,6 +7,35 @@ let firebaseFirestore = null;
 let firebaseStorage = null;
 let firebaseDatabase = null;
 
+function isPlainFirestoreTimestampMap(data) {
+    if (data === null || data === undefined || typeof data !== 'object' || Array.isArray(data)) {
+        return false;
+    }
+    if (data.__fieldValue__) {
+        return false;
+    }
+    const keys = Object.keys(data);
+    if (keys.length === 0 || keys.length > 2) {
+        return false;
+    }
+    for (const key of keys) {
+        if (key !== 'seconds' && key !== 'nanoseconds' && key !== '_seconds' && key !== '_nanoseconds') {
+            return false;
+        }
+    }
+    const seconds = data.seconds ?? data._seconds;
+    const nanoseconds = data.nanoseconds ?? data._nanoseconds ?? 0;
+    return typeof seconds === 'number' && Number.isFinite(seconds)
+        && typeof nanoseconds === 'number' && Number.isFinite(nanoseconds);
+}
+
+async function toFirestoreTimestamp(seconds, nanoseconds) {
+    const { Timestamp } =
+        await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js');
+    const nanos = typeof nanoseconds === 'number' && Number.isFinite(nanoseconds) ? nanoseconds : 0;
+    return new Timestamp(seconds, nanos);
+}
+
 // Transform C# FieldValue sentinels to Firebase FieldValue calls
 async function transformFieldValues(data) {
     if (data === null || data === undefined) return data;
@@ -23,6 +52,13 @@ async function transformFieldValues(data) {
         switch (data.__fieldValue__) {
             case 'serverTimestamp':
                 return serverTimestamp();
+            case 'timestamp': {
+                const seconds = data.seconds ?? data._seconds;
+                if (typeof seconds !== 'number' || !Number.isFinite(seconds)) {
+                    throw new Error('timestamp requires a numeric seconds value');
+                }
+                return toFirestoreTimestamp(seconds, data.nanoseconds ?? data._nanoseconds ?? 0);
+            }
             case 'increment':
                 if (typeof data.value !== 'number') {
                     throw new Error('increment requires a numeric value');
@@ -43,6 +79,12 @@ async function transformFieldValues(data) {
             default:
                 throw new Error(`Unknown FieldValue type: ${data.__fieldValue__}`);
         }
+    }
+
+    // Legacy / round-trip shape from FirestoreCloudTimestampJsonConverter before the sentinel:
+    // plain {seconds,nanoseconds} must become a Timestamp or rules that require `is timestamp` deny.
+    if (isPlainFirestoreTimestampMap(data)) {
+        return toFirestoreTimestamp(data.seconds ?? data._seconds, data.nanoseconds ?? data._nanoseconds ?? 0);
     }
 
     // Recursively transform nested objects
