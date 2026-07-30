@@ -50,8 +50,11 @@ internal sealed class WasmDocumentReference<T> : IDocumentReference<T> where T :
         var result = await _jsInterop.FirestoreSetAsync(_path, data, merge);
 
         if (!result.Success)
-            return Result<Unit>.Failure(
-                new FirebaseError(result.Error!.Code, result.Error.Message));
+        {
+            var err = new FirebaseError(result.Error!.Code, result.Error.Message);
+            FirestoreWriteFailureSink.Notify("set", _path, err);
+            return Result<Unit>.Failure(err);
+        }
 
         return Unit.Value;
     }
@@ -63,8 +66,11 @@ internal sealed class WasmDocumentReference<T> : IDocumentReference<T> where T :
         var result = await _jsInterop.FirestoreUpdateAsync(_path, fields);
 
         if (!result.Success)
-            return Result<Unit>.Failure(
-                new FirebaseError(result.Error!.Code, result.Error.Message));
+        {
+            var err = new FirebaseError(result.Error!.Code, result.Error.Message);
+            FirestoreWriteFailureSink.Notify("update", _path, err);
+            return Result<Unit>.Failure(err);
+        }
 
         return Unit.Value;
     }
@@ -74,8 +80,11 @@ internal sealed class WasmDocumentReference<T> : IDocumentReference<T> where T :
         var result = await _jsInterop.FirestoreDeleteAsync(_path);
 
         if (!result.Success)
-            return Result<Unit>.Failure(
-                new FirebaseError(result.Error!.Code, result.Error.Message));
+        {
+            var err = new FirebaseError(result.Error!.Code, result.Error.Message);
+            FirestoreWriteFailureSink.Notify("delete", _path, err);
+            return Result<Unit>.Failure(err);
+        }
 
         return Unit.Value;
     }
