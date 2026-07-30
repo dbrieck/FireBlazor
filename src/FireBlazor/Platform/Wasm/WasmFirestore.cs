@@ -87,14 +87,20 @@ internal sealed class WasmFirestore : IFirestore
                         }));
 
                     if (!batchResult.Success)
-                        return Result<T>.Failure(new FirebaseError(batchResult.Error!.Code, batchResult.Error.Message));
+                    {
+                        var err = new FirebaseError(batchResult.Error!.Code, batchResult.Error.Message);
+                        FirestoreWriteFailureSink.Notify("transaction", "(transaction)", err);
+                        return Result<T>.Failure(err);
+                    }
                 }
 
                 return Result<T>.Success(result);
             }
             catch (Exception ex)
             {
-                return Result<T>.Failure(new FirebaseError("firestore/unknown", ex.Message));
+                var err = new FirebaseError("firestore/unknown", ex.Message);
+                FirestoreWriteFailureSink.Notify("transaction", "(transaction)", err);
+                return Result<T>.Failure(err);
             }
         }
 
@@ -107,16 +113,26 @@ internal sealed class WasmFirestore : IFirestore
             var result = await _jsInterop.FirestoreRunTransactionWithCallbackAsync(readPaths, callbackRef);
 
             if (!result.Success)
-                return Result<T>.Failure(new FirebaseError(result.Error!.Code, result.Error.Message));
+            {
+                var err = new FirebaseError(result.Error!.Code, result.Error.Message);
+                FirestoreWriteFailureSink.Notify("transaction", "(transaction)", err);
+                return Result<T>.Failure(err);
+            }
 
             if (handler.Exception != null)
-                return Result<T>.Failure(new FirebaseError("firestore/unknown", handler.Exception.Message));
+            {
+                var err = new FirebaseError("firestore/unknown", handler.Exception.Message);
+                FirestoreWriteFailureSink.Notify("transaction", "(transaction)", err);
+                return Result<T>.Failure(err);
+            }
 
             return Result<T>.Success(handler.Result!);
         }
         catch (Exception ex)
         {
-            return Result<T>.Failure(new FirebaseError("firestore/unknown", ex.Message));
+            var err = new FirebaseError("firestore/unknown", ex.Message);
+            FirestoreWriteFailureSink.Notify("transaction", "(transaction)", err);
+            return Result<T>.Failure(err);
         }
         finally
         {
@@ -392,7 +408,14 @@ internal sealed class WasmWriteBatch : IWriteBatch
         var result = await _jsInterop.FirestoreBatchWriteAsync(_operations);
 
         if (!result.Success)
-            return Result<Unit>.Failure(new FirebaseError(result.Error!.Code, result.Error.Message));
+        {
+            var err = new FirebaseError(result.Error!.Code, result.Error.Message);
+            var pathSummary = _operations.Count == 1
+                ? _operations[0].Path
+                : $"{_operations.Count} ops";
+            FirestoreWriteFailureSink.Notify("batch", pathSummary ?? "(batch)", err);
+            return Result<Unit>.Failure(err);
+        }
 
         return Unit.Value;
     }
