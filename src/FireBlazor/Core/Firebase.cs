@@ -45,6 +45,42 @@ internal sealed class Firebase : IFirebase
         await _jsInterop.InitializeAsync(_options);
         _logger.LogDebug("Firebase app initialized");
 
+        // App Check before Auth: getAuth() restores IndexedDB persistence and can fire
+        // Identity Toolkit accounts:lookup immediately. With enforcement enabled, that
+        // request 401s unless x-firebase-appcheck is already attached.
+        if (_options.AppCheckOptions != null)
+        {
+            _options.AppCheckOptions.Validate();  // Fail fast on invalid config
+
+            // Create the service early so Status is observable
+            var appCheck = new WasmAppCheck(_jsInterop, _options.AppCheckOptions);
+            _appCheck = appCheck;
+
+            // Auto-activate
+            var result = await appCheck.ActivateAsync();
+
+            if (result.IsFailure)
+            {
+                _logger.LogWarning(
+                    "App Check activation failed: {Error}. Firebase services may reject requests if enforcement is enabled.",
+                    result.Error?.Message);
+                // Don't throw - app continues but AppCheck.Status will be Failed
+            }
+            else
+            {
+                _logger.LogDebug("App Check activated successfully");
+
+                // Activate registers the provider only; prime a token before Auth hydrate.
+                var tokenResult = await appCheck.GetTokenAsync(forceRefresh: false);
+                if (tokenResult.IsFailure)
+                {
+                    _logger.LogWarning(
+                        "App Check token prime failed: {Error}. Auth restore may 401 until a token is available.",
+                        tokenResult.Error?.Message);
+                }
+            }
+        }
+
         // Initialize Auth if configured
         if (_options.AuthOptions != null)
         {
@@ -71,31 +107,6 @@ internal sealed class Firebase : IFirebase
         {
             await _jsInterop.InitializeDatabaseAsync(_options.RealtimeDbOptions.CustomUrl, emulators?.RealtimeDatabaseHost);
             _logger.LogDebug("Realtime Database initialized{Emulator}", emulators?.IsRealtimeDatabaseEnabled == true ? " (emulator)" : "");
-        }
-
-        // Initialize App Check if configured
-        if (_options.AppCheckOptions != null)
-        {
-            _options.AppCheckOptions.Validate();  // Fail fast on invalid config
-
-            // Create the service early so Status is observable
-            var appCheck = new WasmAppCheck(_jsInterop, _options.AppCheckOptions);
-            _appCheck = appCheck;
-
-            // Auto-activate
-            var result = await appCheck.ActivateAsync();
-
-            if (result.IsFailure)
-            {
-                _logger.LogWarning(
-                    "App Check activation failed: {Error}. Firebase services may reject requests if enforcement is enabled.",
-                    result.Error?.Message);
-                // Don't throw - app continues but AppCheck.Status will be Failed
-            }
-            else
-            {
-                _logger.LogDebug("App Check activated successfully");
-            }
         }
 
         _initialized = true;
