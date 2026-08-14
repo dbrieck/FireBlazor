@@ -90,3 +90,58 @@ internal static class CamelCaseHelper
         return char.ToLowerInvariant(name[0]) + name[1..];
     }
 }
+
+/// <summary>
+/// Normalizes a query comparison value (Where clause / cursor value) into a JS-interop-safe shape.
+///
+/// Blazor's JS interop serializes call arguments with the WASM runtime's own <see cref="JsonSerializerOptions"/>,
+/// which do NOT carry FireBlazor's <see cref="FirestoreCloudTimestampJsonConverter"/>. A bare
+/// <see cref="Google.Cloud.Firestore.Timestamp"/> therefore serializes to <c>{}</c> (it exposes no
+/// serializable public properties), so a <c>where("date", "&gt;=", ts)</c> bound reaches the Firebase JS SDK
+/// as an empty map and matches nothing — silently breaking every timestamp range / cursor query on WASM.
+///
+/// This emits the same <c>{ __fieldValue__: "timestamp", seconds, nanoseconds }</c> sentinel the document
+/// write path uses, which <c>fireblazor.js transformFieldValues</c> reconstructs into a real Firestore
+/// <c>Timestamp</c> before applying the constraint. Non-temporal values pass through unchanged; collections
+/// (for <c>in</c> / <c>array-contains-any</c>) are normalized element-wise.
+/// </summary>
+internal static class FirestoreQueryValue
+{
+    public static object? Normalize(object? value) => value switch
+    {
+        null => null,
+        Google.Cloud.Firestore.Timestamp ts => TimestampSentinel(ts.ToDateTime()),
+        DateTime dt => TimestampSentinel(DateTime.SpecifyKind(dt, DateTimeKind.Utc)),
+        DateTimeOffset dto => TimestampSentinel(dto.UtcDateTime),
+        string => value,
+        System.Collections.IEnumerable items => NormalizeMany(items),
+        _ => value,
+    };
+
+    public static object?[]? NormalizeCursor(object[]? values) =>
+        values?.Select(Normalize).ToArray();
+
+    private static List<object?> NormalizeMany(System.Collections.IEnumerable items)
+    {
+        var list = new List<object?>();
+        foreach (var item in items)
+        {
+            list.Add(Normalize(item));
+        }
+
+        return list;
+    }
+
+    private static object TimestampSentinel(DateTime utc)
+    {
+        if (utc.Kind != DateTimeKind.Utc)
+        {
+            utc = DateTime.SpecifyKind(utc, DateTimeKind.Utc);
+        }
+
+        var ticks = utc.Ticks - DateTime.UnixEpoch.Ticks;
+        var seconds = ticks / TimeSpan.TicksPerSecond;
+        var nanoseconds = (int)(ticks % TimeSpan.TicksPerSecond * 100); // 1 tick = 100 ns
+        return new { __fieldValue__ = "timestamp", seconds, nanoseconds };
+    }
+}
