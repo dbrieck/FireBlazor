@@ -695,7 +695,7 @@ export async function firestoreQuery(path, queryParams) {
     const { collection, query, where, orderBy, limit, startAt, startAfter, endAt, endBefore, getDocs, documentId } = await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js');
     try {
         let q = collection(firebaseFirestore, path);
-        const constraints = buildFirestoreQueryConstraints(queryParams, { where, orderBy, limit, startAt, startAfter, endAt, endBefore, documentId });
+        const constraints = await buildFirestoreQueryConstraints(queryParams, { where, orderBy, limit, startAt, startAfter, endAt, endBefore, documentId });
 
         q = query(q, ...constraints);
         const snapshot = await getDocs(q);
@@ -709,7 +709,16 @@ export async function firestoreQuery(path, queryParams) {
     }
 }
 
-function buildFirestoreQueryConstraints(queryParams, constraintFns) {
+// Reconstruct FieldValue sentinels / timestamp maps inside a query comparison value (or a cursor
+// value) into real Firebase values. Without this, a Timestamp bound serialized by
+// FirestoreCloudTimestampJsonConverter reaches the JS SDK as a plain map and never matches a real
+// timestamp field, so every date-range / timestamp-cursor query silently returns nothing. The write
+// path already runs values through transformFieldValues; the query path must do the same.
+async function transformQueryValues(values) {
+    return Promise.all(values.map(v => transformFieldValues(v)));
+}
+
+async function buildFirestoreQueryConstraints(queryParams, constraintFns) {
     const constraints = [];
     if (!queryParams) {
         return constraints;
@@ -717,7 +726,8 @@ function buildFirestoreQueryConstraints(queryParams, constraintFns) {
 
     if (queryParams.where) {
         for (const w of queryParams.where) {
-            constraints.push(constraintFns.where(w.field, w.op, w.value));
+            const value = await transformFieldValues(w.value);
+            constraints.push(constraintFns.where(w.field, w.op, value));
         }
     }
     if (queryParams.orderBy) {
@@ -730,16 +740,16 @@ function buildFirestoreQueryConstraints(queryParams, constraintFns) {
         }
     }
     if (queryParams.startAt) {
-        constraints.push(constraintFns.startAt(...queryParams.startAt));
+        constraints.push(constraintFns.startAt(...await transformQueryValues(queryParams.startAt)));
     }
     if (queryParams.startAfter) {
-        constraints.push(constraintFns.startAfter(...queryParams.startAfter));
+        constraints.push(constraintFns.startAfter(...await transformQueryValues(queryParams.startAfter)));
     }
-    if (queryParams.endAt) {
-        constraints.push(constraintFns.endAt(...queryParams.endAt));
+    if (queryParams.endAt && constraintFns.endAt) {
+        constraints.push(constraintFns.endAt(...await transformQueryValues(queryParams.endAt)));
     }
-    if (queryParams.endBefore) {
-        constraints.push(constraintFns.endBefore(...queryParams.endBefore));
+    if (queryParams.endBefore && constraintFns.endBefore) {
+        constraints.push(constraintFns.endBefore(...await transformQueryValues(queryParams.endBefore)));
     }
     if (queryParams.limit) {
         constraints.push(constraintFns.limit(queryParams.limit));
@@ -766,7 +776,7 @@ export async function firestoreCollectionGroupQuery(collectionId, queryParams) {
         await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js');
     try {
         let q = collectionGroup(firebaseFirestore, collectionId);
-        const constraints = buildFirestoreQueryConstraints(queryParams, { where, orderBy, limit, startAt, startAfter, documentId });
+        const constraints = await buildFirestoreQueryConstraints(queryParams, { where, orderBy, limit, startAt, startAfter, documentId });
         q = query(q, ...constraints);
         const snapshot = await getDocs(q);
 
@@ -790,7 +800,7 @@ export async function firestoreCount(path, queryParams) {
         let q = collRef;
 
         if (queryParams?.where) {
-            const constraints = queryParams.where.map(w => where(w.field, w.op, w.value));
+            const constraints = await Promise.all(queryParams.where.map(async w => where(w.field, w.op, await transformFieldValues(w.value))));
             q = query(collRef, ...constraints);
         }
 
@@ -810,7 +820,7 @@ export async function firestoreSum(path, field, queryParams) {
         let q = collRef;
 
         if (queryParams?.where) {
-            const constraints = queryParams.where.map(w => where(w.field, w.op, w.value));
+            const constraints = await Promise.all(queryParams.where.map(async w => where(w.field, w.op, await transformFieldValues(w.value))));
             q = query(collRef, ...constraints);
         }
 
@@ -830,7 +840,7 @@ export async function firestoreAverage(path, field, queryParams) {
         let q = collRef;
 
         if (queryParams?.where) {
-            const constraints = queryParams.where.map(w => where(w.field, w.op, w.value));
+            const constraints = await Promise.all(queryParams.where.map(async w => where(w.field, w.op, await transformFieldValues(w.value))));
             q = query(collRef, ...constraints);
         }
 
@@ -949,7 +959,7 @@ export async function firestoreSubscribeCollection(path, queryParams, dotnetHelp
         let q = collection(firebaseFirestore, path);
 
         if (queryParams) {
-            const constraints = buildFirestoreQueryConstraints(queryParams, { where, orderBy, limit, startAt, startAfter, documentId });
+            const constraints = await buildFirestoreQueryConstraints(queryParams, { where, orderBy, limit, startAt, startAfter, documentId });
 
             if (constraints.length > 0) {
                 q = query(q, ...constraints);
@@ -997,7 +1007,7 @@ export async function firestoreSubscribeCollectionGroup(collectionId, queryParam
         let q = collectionGroup(firebaseFirestore, collectionId);
 
         if (queryParams) {
-            const constraints = buildFirestoreQueryConstraints(queryParams, { where, orderBy, limit, startAt, startAfter, documentId });
+            const constraints = await buildFirestoreQueryConstraints(queryParams, { where, orderBy, limit, startAt, startAfter, documentId });
 
             if (constraints.length > 0) {
                 q = query(q, ...constraints);

@@ -234,16 +234,16 @@ internal sealed class WasmCollectionReference<T> : ICollectionReference<T> where
         return new
         {
             where = _whereClauses.Count > 0
-                ? _whereClauses.Select(w => new { field = w.Field, op = w.Operator, value = w.Value }).ToArray()
+                ? _whereClauses.Select(w => new { field = w.Field, op = w.Operator, value = FirestoreQueryValue.Normalize(w.Value) }).ToArray()
                 : null,
             orderBy = _orderByClauses.Count > 0
                 ? _orderByClauses.Select(o => new { field = o.Field, direction = o.Direction }).ToArray()
                 : null,
             limit = _limit,
-            startAt = _startAt,
-            startAfter = _startAfter,
-            endAt = _endAt,
-            endBefore = _endBefore
+            startAt = FirestoreQueryValue.NormalizeCursor(_startAt),
+            startAfter = FirestoreQueryValue.NormalizeCursor(_startAfter),
+            endAt = FirestoreQueryValue.NormalizeCursor(_endAt),
+            endBefore = FirestoreQueryValue.NormalizeCursor(_endBefore)
         };
     }
 
