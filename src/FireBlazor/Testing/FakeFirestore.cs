@@ -75,10 +75,24 @@ public sealed class FakeFirestore : IFirestore
         return Task.FromResult(Result<Unit>.Success(Unit.Value));
     }
 
+    private Action? _beforeNextTransactionBody;
+
+    /// <summary>
+    /// Test seam: runs the given action exactly once, immediately before the next
+    /// <see cref="TransactionAsync{T}"/> body executes, then clears it. Simulates a concurrent write that
+    /// commits between a caller's pre-transaction reads and the transaction's own reads — the window an
+    /// optimistic-concurrency guard inside the transaction must detect. No-op in production Firestore.
+    /// </summary>
+    public void RunBeforeNextTransaction(Action action) => _beforeNextTransactionBody = action;
+
     public Task<Result<T>> TransactionAsync<T>(Func<ITransaction, Task<T>> operations)
     {
         if (TryConsumeSimulatedError(out var error))
             return Task.FromResult(Result<T>.Failure(error!));
+
+        var interleave = _beforeNextTransactionBody;
+        _beforeNextTransactionBody = null;
+        interleave?.Invoke();
 
         var transaction = new FakeTransaction(this);
         var result = operations(transaction).Result;
