@@ -189,4 +189,116 @@ public class WhereExpressionVisitorTests
         Assert.Single(visitor.Clauses);
         Assert.Equal(18, visitor.Clauses[0].Value);
     }
+
+    // --- Bare boolean members (root-cause fix) ---
+    // Before the fix, Not(member) and a bare positive member produced NO where clause on WASM, so
+    // the filter silently vanished and the query returned rows it should have excluded. FakeFirestore
+    // compiles the real predicate, so it never reproduced this — only the JS-SDK translator did.
+
+    [Fact]
+    public void Visit_BareBooleanNegation_ExtractsEqualsFalse()
+    {
+        Expression<Func<TestDocument, bool>> expr = x => !x.Flag;
+        var visitor = new WhereExpressionVisitor();
+
+        visitor.Visit(expr);
+
+        Assert.Single(visitor.Clauses);
+        Assert.Equal("flag", visitor.Clauses[0].Field);
+        Assert.Equal("==", visitor.Clauses[0].Operator);
+        Assert.Equal(false, visitor.Clauses[0].Value);
+    }
+
+    [Fact]
+    public void Visit_BarePositiveBoolean_ExtractsEqualsTrue()
+    {
+        Expression<Func<TestDocument, bool>> expr = x => x.Flag;
+        var visitor = new WhereExpressionVisitor();
+
+        visitor.Visit(expr);
+
+        Assert.Single(visitor.Clauses);
+        Assert.Equal("flag", visitor.Clauses[0].Field);
+        Assert.Equal("==", visitor.Clauses[0].Operator);
+        Assert.Equal(true, visitor.Clauses[0].Value);
+    }
+
+    [Fact]
+    public void Visit_AndAlsoWithBareNegation_ExtractsTwoClauses()
+    {
+        Expression<Func<TestDocument, bool>> expr = x => x.Name == "a" && !x.Flag;
+        var visitor = new WhereExpressionVisitor();
+
+        visitor.Visit(expr);
+
+        Assert.Equal(2, visitor.Clauses.Count);
+        Assert.Equal("name", visitor.Clauses[0].Field);
+        Assert.Equal("==", visitor.Clauses[0].Operator);
+        Assert.Equal("a", visitor.Clauses[0].Value);
+        Assert.Equal("flag", visitor.Clauses[1].Field);
+        Assert.Equal("==", visitor.Clauses[1].Operator);
+        Assert.Equal(false, visitor.Clauses[1].Value);
+    }
+
+    [Fact]
+    public void Visit_AndAlsoWithBarePositive_ExtractsTwoClauses()
+    {
+        Expression<Func<TestDocument, bool>> expr = x => x.Name == "a" && x.Flag;
+        var visitor = new WhereExpressionVisitor();
+
+        visitor.Visit(expr);
+
+        Assert.Equal(2, visitor.Clauses.Count);
+        Assert.Equal("name", visitor.Clauses[0].Field);
+        Assert.Equal("flag", visitor.Clauses[1].Field);
+        Assert.Equal("==", visitor.Clauses[1].Operator);
+        Assert.Equal(true, visitor.Clauses[1].Value);
+    }
+
+    [Fact]
+    public void Visit_BooleanEqualsFalse_StillExtractsSingleClause()
+    {
+        // The per-query workaround (`x.Flag == false`) must keep translating to exactly one clause,
+        // and must NOT double up now that a VisitMember override exists.
+        Expression<Func<TestDocument, bool>> expr = x => x.Flag == false;
+        var visitor = new WhereExpressionVisitor();
+
+        visitor.Visit(expr);
+
+        Assert.Single(visitor.Clauses);
+        Assert.Equal("flag", visitor.Clauses[0].Field);
+        Assert.Equal("==", visitor.Clauses[0].Operator);
+        Assert.Equal(false, visitor.Clauses[0].Value);
+    }
+
+    [Fact]
+    public void Visit_CapturedBooleanOperand_DoesNotProduceClause()
+    {
+        // A captured bool is a client-side constant, not a document field, so it must not become a
+        // where clause — only the real field comparison should survive.
+        var enabled = true;
+        Expression<Func<TestDocument, bool>> expr = x => x.Name == "a" && enabled;
+        var visitor = new WhereExpressionVisitor();
+
+        visitor.Visit(expr);
+
+        Assert.Single(visitor.Clauses);
+        Assert.Equal("name", visitor.Clauses[0].Field);
+    }
+
+    [Fact]
+    public void Visit_BooleanMemberAsContainsArgument_DoesNotDoubleClause()
+    {
+        // boolFlags.Contains(x.Flag) is an in-query on a bool field. VisitMethodCall must not recurse
+        // into the argument, or x.Flag would also add a spurious ("flag","==",true) clause.
+        var boolFlags = new[] { true };
+        Expression<Func<TestDocument, bool>> expr = x => boolFlags.Contains(x.Flag);
+        var visitor = new WhereExpressionVisitor();
+
+        visitor.Visit(expr);
+
+        Assert.Single(visitor.Clauses);
+        Assert.Equal("flag", visitor.Clauses[0].Field);
+        Assert.Equal("in", visitor.Clauses[0].Operator);
+    }
 }
