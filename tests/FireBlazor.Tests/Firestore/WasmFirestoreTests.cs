@@ -122,4 +122,5 @@ public class TestDocument
     public int Age { get; set; }
     public string? Status { get; set; }
     public List<string> Tags { get; set; } = [];
+    public bool Flag { get; set; }
 }

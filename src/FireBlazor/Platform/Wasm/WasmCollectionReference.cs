@@ -309,7 +309,12 @@ internal sealed class WhereExpressionVisitor : ExpressionVisitor
             HandleContainsMethod(node, isNegated: false);
         }
 
-        return base.VisitMethodCall(node);
+        // Method calls are terminal in the supported predicate grammar, so do NOT descend into the
+        // arguments. Descending would let a bool member passed as a Contains value (e.g.
+        // boolList.Contains(x.Flag)) fall through to VisitMember and add a spurious "flag == true"
+        // clause alongside the correct in-clause. HandleContainsMethod already reads the operands it
+        // needs directly, so nothing is lost by not recursing.
+        return node;
     }
 
     protected override Expression VisitUnary(UnaryExpression node)
@@ -324,7 +329,33 @@ internal sealed class WhereExpressionVisitor : ExpressionVisitor
             }
         }
 
+        // Handle bare boolean negation: !x.Flag -> ("flag", "==", false). Only a bool member bound
+        // directly to the lambda parameter qualifies; captured variables and nested member access
+        // are excluded by TryGetBoolParameterMember. Without this, Not(member) produced NO clause and
+        // the filter silently vanished on WASM (returning rows it should have excluded).
+        if (node.NodeType == ExpressionType.Not && TryGetBoolParameterMember(node.Operand, out var field))
+        {
+            Clauses.Add(new WhereClause(field, "==", false));
+            return node;
+        }
+
         return base.VisitUnary(node);
+    }
+
+    protected override Expression VisitMember(MemberExpression node)
+    {
+        // Handle a bare positive boolean member bound to the lambda parameter: it appears either as
+        // the whole predicate (x => x.Flag) or as an AndAlso operand (x => ... && x.Flag), both of
+        // which reach this override via Visit. Comparisons never descend here (VisitBinary reads its
+        // operands directly), and Contains arguments never descend here (VisitMethodCall does not
+        // recurse), so a member reaching this point stands alone as a boolean predicate.
+        if (TryGetBoolParameterMember(node, out var field))
+        {
+            Clauses.Add(new WhereClause(field, "==", true));
+            return node;
+        }
+
+        return base.VisitMember(node);
     }
 
     private void HandleContainsMethod(MethodCallExpression node, bool isNegated)
@@ -398,6 +429,25 @@ internal sealed class WhereExpressionVisitor : ExpressionVisitor
                 return expr;
             }
         }
+    }
+
+    // Recognizes a boolean document field referenced bare (not compared, not a Contains operand):
+    // a MemberExpression whose immediate owner is the lambda parameter (x.Flag, not closure.Flag or
+    // x.Child.Flag) and whose type is bool or bool?. Used for `x.Flag` (=> true) and `!x.Flag`
+    // (=> false). Captured-variable members fail the ParameterExpression check, so their values are
+    // still evaluated as comparison operands by ExtractMemberAndValue rather than becoming clauses.
+    private static bool TryGetBoolParameterMember(Expression expr, out string field)
+    {
+        if (expr is MemberExpression member
+            && member.Expression is ParameterExpression
+            && (member.Type == typeof(bool) || member.Type == typeof(bool?)))
+        {
+            field = CamelCaseHelper.ToCamelCase(member.Member.Name);
+            return true;
+        }
+
+        field = string.Empty;
+        return false;
     }
 
     private static (string? memberName, object? value, bool isMember) ExtractMemberAndValue(Expression expr)

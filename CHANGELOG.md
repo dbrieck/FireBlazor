@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Bare boolean member predicates** - `.Where(x => !x.Flag)` and `.Where(x => x.Flag)` (a boolean
+  document field referenced directly, without a comparison) silently produced no filter, because the
+  predicate visitor only handled `Not` for `Contains`/not-in and had no path for a bare
+  `MemberExpression`. The dropped clause meant WASM queries returned rows they should have excluded
+  (e.g. voided/deleted/unpublished records leaking into results, counts, and balances). The visitor
+  now translates a bare bool member bound to the lambda parameter to `field == true` and its negation
+  to `field == false`, in the whole predicate or as an `&&` operand. Comparison operands and
+  `Contains` arguments are unaffected (no double clauses); captured variables and nested member
+  access are excluded.
 - **`in` / `not-in` queries with array collections** - `.Where(x => array.Contains(x.Field))`
   where `array` is a `T[]` silently produced no filter, because arrays bind to the span-based
   `MemoryExtensions.Contains` overload (wrapping the array in an implicit `ReadOnlySpan<T>`
