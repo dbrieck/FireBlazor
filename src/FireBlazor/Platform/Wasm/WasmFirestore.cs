@@ -67,13 +67,29 @@ internal sealed class WasmFirestore : IFirestore
 
         var readPaths = collectingTx.ReadPaths;
 
-        // If no reads needed, just run the callback directly
+        // The dry run sees Exists=false placeholders, so a body that bails out on "not found" stops before
+        // its later reads and the collected paths are a lower bound, not the read set. Phase 2 reads any
+        // path it missed inside the live transaction; this phase only skips the transaction when the real
+        // run turns out to need no reads at all.
         if (readPaths.Count == 0)
         {
             try
             {
                 var directTx = new DirectTransaction();
-                var result = await operations(directTx);
+                T result;
+                try
+                {
+                    result = await operations(directTx);
+                }
+                catch (DryRunMissedReadException)
+                {
+                    // The real run reads after all: discard its buffered writes and run it as a transaction.
+                    return await RunWithCallbackAsync(readPaths, operations);
+                }
+
+                // Same, for a body that caught the exception itself instead of letting it propagate.
+                if (directTx.AttemptedRead)
+                    return await RunWithCallbackAsync(readPaths, operations);
 
                 if (directTx.Operations.Count > 0)
                 {
@@ -104,6 +120,12 @@ internal sealed class WasmFirestore : IFirestore
             }
         }
 
+        return await RunWithCallbackAsync(readPaths, operations);
+    }
+
+    private async Task<Result<T>> RunWithCallbackAsync<T>(
+        IReadOnlyList<string> readPaths, Func<ITransaction, Task<T>> operations)
+    {
         // Phase 2: Execute transaction with callback
         var handler = new TransactionHandler<T>(_jsInterop, operations);
         var callbackRef = DotNetObjectReference.Create(handler);
@@ -173,6 +195,18 @@ internal sealed class CollectingTransaction : ITransaction
 }
 
 /// <summary>
+/// Thrown by <see cref="DirectTransaction.GetAsync{T}"/> when a body the dry run saw make no reads reads after
+/// all; <see cref="WasmFirestore"/> catches it and re-runs the body as a real transaction.
+/// </summary>
+internal sealed class DryRunMissedReadException : InvalidOperationException
+{
+    public DryRunMissedReadException()
+        : base("The transaction read a document its dry run did not; re-running it as a transaction.")
+    {
+    }
+}
+
+/// <summary>
 /// Transaction for direct execution without reads (uses batch write).
 /// </summary>
 internal sealed class DirectTransaction : ITransaction
@@ -181,9 +215,13 @@ internal sealed class DirectTransaction : ITransaction
 
     public IReadOnlyList<TransactionOperation> Operations => _operations;
 
+    /// <summary>True once the body tried to read: the batch-write shortcut no longer applies.</summary>
+    public bool AttemptedRead { get; private set; }
+
     public Task<Result<DocumentSnapshot<T>>> GetAsync<T>(IDocumentReference<T> doc) where T : class
     {
-        throw new InvalidOperationException("GetAsync should not be called in DirectTransaction");
+        AttemptedRead = true;
+        throw new DryRunMissedReadException();
     }
 
     public ITransaction Set<T>(IDocumentReference<T> doc, T data) where T : class
@@ -227,12 +265,30 @@ internal sealed class TransactionHandler<T>
         _operations = operations;
     }
 
+    /// <summary>
+    /// Entry point of a <c>fireblazor.js</c> that predates the transaction reader (the module URL is not
+    /// fingerprinted, so a browser can pair a cached copy with a newer assembly).
+    /// </summary>
     [JSInvokable]
-    public async Task<TransactionCallbackResult> ProcessTransaction(Dictionary<string, JsonElement> readData)
+    public Task<TransactionCallbackResult> ProcessTransaction(Dictionary<string, JsonElement> readData)
+        => ProcessTransactionWithReader(readData, null);
+
+    /// <param name="readData">The documents JS pre-read for the paths the dry run collected.</param>
+    /// <param name="reader">
+    /// JS object whose <c>get(path)</c> reads a document inside the same live transaction, for paths the dry
+    /// run never reached (its Exists=false placeholders make bodies bail out early). Null on hosts without
+    /// <c>DotNet.createJSObjectReference</c>; such reads then fail as "not pre-read".
+    /// </param>
+    [JSInvokable]
+    public async Task<TransactionCallbackResult> ProcessTransactionWithReader(
+        Dictionary<string, JsonElement> readData, IJSObjectReference? reader)
     {
+        // Firestore re-invokes the callback on contention: each attempt starts clean.
+        Result = default;
+        Exception = null;
         try
         {
-            var executingTx = new ExecutingTransaction(readData);
+            var executingTx = new ExecutingTransaction(readData, reader);
             Result = await _operations(executingTx);
 
             // Serialize operations with FieldValueConverter
@@ -244,10 +300,12 @@ internal sealed class TransactionHandler<T>
                 merge = op.Merge
             }).ToList();
 
+            // The body's result stays on this side (WasmFirestore reads it from Result). It is never sent to JS:
+            // serializing it there runs after this try, inside Blazor's dispatcher, and a value that cannot
+            // serialize (a failed Result<T>, whose Value getter throws) left the JS promise unsettled forever.
             return new TransactionCallbackResult
             {
-                Operations = serializedOps.Cast<object>().ToList(),
-                Result = Result
+                Operations = serializedOps.Cast<object>().ToList()
             };
         }
         catch (Exception ex)
@@ -259,12 +317,12 @@ internal sealed class TransactionHandler<T>
 }
 
 /// <summary>
-/// Result returned to JS from the transaction callback.
+/// Result returned to JS from the transaction callback. Only JSON-safe members: anything here is serialized by
+/// Blazor's dispatcher outside the callback's try/catch, so a throwing getter would hang the transaction.
 /// </summary>
 internal sealed class TransactionCallbackResult
 {
     public List<object> Operations { get; set; } = [];
-    public object? Result { get; set; }
     public string? Error { get; set; }
 }
 
@@ -274,27 +332,44 @@ internal sealed class TransactionCallbackResult
 internal sealed class ExecutingTransaction : ITransaction
 {
     private readonly Dictionary<string, JsonElement> _readData;
+    private readonly IJSObjectReference? _reader;
     private readonly List<TransactionOperation> _operations = [];
 
     public IReadOnlyList<TransactionOperation> Operations => _operations;
 
-    public ExecutingTransaction(Dictionary<string, JsonElement> readData)
+    public ExecutingTransaction(Dictionary<string, JsonElement> readData, IJSObjectReference? reader = null)
     {
         _readData = readData;
+        _reader = reader;
     }
 
-    public Task<Result<DocumentSnapshot<T>>> GetAsync<T>(IDocumentReference<T> doc) where T : class
+    public async Task<Result<DocumentSnapshot<T>>> GetAsync<T>(IDocumentReference<T> doc) where T : class
     {
         ArgumentNullException.ThrowIfNull(doc);
 
         if (!_readData.TryGetValue(doc.Path, out var data))
         {
-            return Task.FromResult(Result<DocumentSnapshot<T>>.Failure(
-                new FirebaseError("firestore/not-found", "Document was not pre-read in transaction")));
+            if (_reader is null)
+            {
+                return Result<DocumentSnapshot<T>>.Failure(
+                    new FirebaseError("firestore/not-found", "Document was not pre-read in transaction"));
+            }
+
+            // A path the dry run never reached: read it inside the live transaction so it joins the read set.
+            // Writes are buffered until the body returns, so this is still a read before any write.
+            try
+            {
+                data = await _reader.InvokeAsync<JsonElement>("get", doc.Path);
+            }
+            catch (JSException ex)
+            {
+                return Result<DocumentSnapshot<T>>.Failure(new FirebaseError("firestore/unknown", ex.Message));
+            }
+
+            _readData[doc.Path] = data;
         }
 
-        var snapshot = ParseSnapshot<T>(data, doc.Id, doc.Path);
-        return Task.FromResult(Result<DocumentSnapshot<T>>.Success(snapshot));
+        return Result<DocumentSnapshot<T>>.Success(ParseSnapshot<T>(data, doc.Id, doc.Path));
     }
 
     private static DocumentSnapshot<T> ParseSnapshot<T>(JsonElement item, string docId, string docPath) where T : class

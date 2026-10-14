@@ -20,6 +20,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **WASM transactions hung when the body returned a failed `Result`** - `TransactionAsync` sent the
+  body's return value back to JS inside the callback payload. Blazor serializes that payload after
+  the callback's own `try/catch`, so a value that could not serialize (a failed `Result<T>`, whose
+  `Value` getter throws) faulted in the dispatcher and the JS promise never settled: the awaiting
+  call hung instead of completing. The return value now stays on the .NET side, and every exit path
+  completes with a `Result`.
+- **WASM transactions missed reads the dry run never reached** - the dry run that collects read paths
+  sees `Exists = false` placeholders, so a body that returns early on "not found" never reaches its
+  later (e.g. guard) reads. In the execute pass those reads used to fail with "Document was not
+  pre-read in transaction". They are now read on demand inside the same live transaction (a reader
+  passed to `ProcessTransactionWithReader`), so they join its read set. A body the dry run saw make
+  no reads, which reads for real, now runs as a transaction instead of failing in the batch-write
+  shortcut. The one-argument `ProcessTransaction` entry point stays for a cached older `fireblazor.js`.
 - **Bare boolean member predicates** - `.Where(x => !x.Flag)` and `.Where(x => x.Flag)` (a boolean
   document field referenced directly, without a comparison) silently produced no filter, because the
   predicate visitor only handled `Not` for `Contains`/not-in and had no path for a bare
