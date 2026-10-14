@@ -640,37 +640,22 @@ export async function firestoreRunTransactionWithCallback(readPaths, dotnetCallb
         await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js');
 
     try {
-        await runTransaction(firebaseFirestore, async (transaction) => {
-            const readInTransaction = async (path) => {
-                const snapshot = await transaction.get(doc(firebaseFirestore, path));
-                return {
+        const result = await runTransaction(firebaseFirestore, async (transaction) => {
+            // Read all requested documents inside the transaction
+            const readResults = {};
+            for (const path of readPaths) {
+                const docRef = doc(firebaseFirestore, path);
+                const snapshot = await transaction.get(docRef);
+                readResults[path] = {
                     path: path,
                     id: snapshot.id,
                     exists: snapshot.exists(),
                     data: snapshot.exists() ? snapshot.data() : null
                 };
-            };
-
-            // Read all requested documents inside the transaction
-            const readResults = {};
-            for (const path of readPaths) {
-                readResults[path] = await readInTransaction(path);
             }
 
-            // The C# dry run that produced readPaths sees "does not exist" placeholders, so a body that bails
-            // out on a missing document never reaches its later reads. Give C# a reader for those paths,
-            // bound to this same transaction so they join its read set.
-            const createRef = globalThis.DotNet?.createJSObjectReference;
-            const reader = createRef ? createRef({ get: readInTransaction }) : null;
-
-            // Call back to C# with read data to get write operations. The C# result value stays on the .NET
-            // side (a failed Result<T> cannot be serialized and used to leave this await unsettled).
-            let writeOpsResult;
-            try {
-                writeOpsResult = await dotnetCallback.invokeMethodAsync('ProcessTransactionWithReader', readResults, reader);
-            } finally {
-                if (reader) globalThis.DotNet.disposeJSObjectReference(reader);
-            }
+            // Call back to C# with read data to get write operations
+            const writeOpsResult = await dotnetCallback.invokeMethodAsync('ProcessTransaction', readResults);
 
             if (writeOpsResult.error) {
                 throw new Error(writeOpsResult.error);
@@ -696,9 +681,11 @@ export async function firestoreRunTransactionWithCallback(readPaths, dotnetCallb
                     }
                 }
             }
+
+            return writeOpsResult.result;
         });
 
-        return { success: true, data: null };
+        return { success: true, data: result };
     } catch (error) {
         return { success: false, error: { code: error.code || 'firestore/unknown', message: error.message } };
     }
