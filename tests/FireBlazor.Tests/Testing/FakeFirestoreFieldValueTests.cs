@@ -219,4 +219,23 @@ public class FakeFirestoreFieldValueTests
         Assert.Equal(2, raw["count"].GetDouble());
         Assert.Equal("a", raw["tags"][0].GetString());
     }
+
+    public class Stamped
+    {
+        public Google.Cloud.Firestore.Timestamp? UpdatedAt { get; set; }
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ServerTimestamp_reads_back_into_a_Timestamp_property()
+    {
+        var doc = _firestore.Collection<Stamped>("counters").Document("c1");
+        await doc.SetAsync(new Stamped());
+        var before = DateTime.UtcNow.AddSeconds(-1);
+
+        await doc.UpdateAsync(new Dictionary<string, object> { ["updatedAt"] = FieldValue.ServerTimestamp() });
+
+        var snapshot = await doc.GetAsync();
+        Assert.True(snapshot.IsSuccess, snapshot.Error?.Message);
+        Assert.True(snapshot.Value.Data!.UpdatedAt!.Value.ToDateTime() >= before);
+    }
 }

@@ -26,6 +26,13 @@ public sealed class FakeFirestore : IFirestore
         PropertyNameCaseInsensitive = true
     };
 
+    // Reads mirror the WASM read path for Timestamp-typed fields: a server timestamp the fake stores (an ISO string)
+    // or a {seconds, nanoseconds} map reads into Google.Cloud.Firestore.Timestamp, as FirestoreJsonOptions does.
+    private static readonly JsonSerializerOptions ReadJsonOptions = new(JsonOptions)
+    {
+        Converters = { new FirestoreCloudTimestampJsonConverter() }
+    };
+
     private static readonly JsonSerializerOptions JsonOptionsWithFieldValue = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -175,7 +182,7 @@ public sealed class FakeFirestore : IFirestore
     {
         if (_documents.TryGetValue(path, out var json))
         {
-            return JsonSerializer.Deserialize<T>(json.GetRawText(), JsonOptions);
+            return JsonSerializer.Deserialize<T>(json.GetRawText(), ReadJsonOptions);
         }
         return null;
     }
@@ -404,7 +411,7 @@ public sealed class FakeFirestore : IFirestore
         {
             if (path.StartsWith(prefix) && !path.Substring(prefix.Length).Contains('/'))
             {
-                var data = JsonSerializer.Deserialize<T>(json.GetRawText(), JsonOptions);
+                var data = JsonSerializer.Deserialize<T>(json.GetRawText(), ReadJsonOptions);
                 yield return (path, data);
             }
         }
@@ -419,7 +426,7 @@ public sealed class FakeFirestore : IFirestore
                 continue;
             }
 
-            var data = JsonSerializer.Deserialize<T>(json.GetRawText(), JsonOptions);
+            var data = JsonSerializer.Deserialize<T>(json.GetRawText(), ReadJsonOptions);
             yield return (path, data);
         }
     }
