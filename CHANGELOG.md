@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ArrayUnion`/`ArrayRemove` as `{elements:[...]}` and `Increment`/`Delete` as maps instead of operations.
   The converter now claims every `FieldValue` subtype. `FakeFirestore` also resolves sentinels on `set`
   and inside nested maps, matching the SDK.
+- **`FakeFirestore` could not read a server timestamp into a `Timestamp` property** - the fake stores a
+  resolved `ServerTimestamp` as an ISO string, and its reads lacked `FirestoreCloudTimestampJsonConverter`, so a
+  `Google.Cloud.Firestore.Timestamp` model field threw `JsonException`. Reads now carry that converter, as the
+  WASM read path does.
 - **WASM transactions hung when the body returned a failed `Result`** - `TransactionAsync` sent the
   body's return value back to JS inside the callback payload. Blazor serializes that payload after
   the callback's own `try/catch`, so a value that could not serialize (a failed `Result<T>`, whose
