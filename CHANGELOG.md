@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **FieldValue sentinels in object-typed containers were written as plain maps** - `FieldValueConverter`
+  was a `JsonConverter<FieldValue>` with the default `CanConvert`, which matches only the exact declared
+  type `FieldValue`. System.Text.Json resolves an `object` slot (a `Dictionary<string, object>` update, an
+  `object` property, a nested map) by its runtime subclass, so `ServerTimestamp` was stored as `{}`,
+  `ArrayUnion`/`ArrayRemove` as `{elements:[...]}` and `Increment`/`Delete` as maps instead of operations.
+  The converter now claims every `FieldValue` subtype. `FakeFirestore` also resolves sentinels on `set`
+  and inside nested maps, matching the SDK.
 - **WASM transactions hung when the body returned a failed `Result`** - `TransactionAsync` sent the
   body's return value back to JS inside the callback payload. Blazor serializes that payload after
   the callback's own `try/catch`, so a value that could not serialize (a failed `Result<T>`, whose

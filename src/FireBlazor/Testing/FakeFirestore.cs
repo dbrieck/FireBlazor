@@ -157,7 +157,14 @@ public sealed class FakeFirestore : IFirestore
 
     internal void SetDocument(string path, object data)
     {
-        var json = JsonSerializer.SerializeToElement(data, JsonOptions);
+        // Serialize with FieldValue support and resolve sentinels, as the real SDK does on set().
+        var json = JsonSerializer.SerializeToElement(data, JsonOptionsWithFieldValue);
+        if (JsonNode.Parse(json.GetRawText()) is JsonObject fields)
+        {
+            var resolved = new JsonObject();
+            ApplyFields(resolved, fields);
+            json = JsonSerializer.SerializeToElement(resolved, JsonOptions);
+        }
         _documents[path] = json;
         NotifyDocumentListeners(path);
         NotifyCollectionListeners(path);
@@ -207,21 +214,7 @@ public sealed class FakeFirestore : IFirestore
         }
 
         // Apply each field from the update, processing FieldValues
-        foreach (var prop in updateNode)
-        {
-            var fieldName = prop.Key;
-            var fieldValue = prop.Value;
-
-            if (IsFieldValueSentinel(fieldValue, out var fieldValueType, out var data))
-            {
-                ApplyFieldValue(existing, fieldName, fieldValueType, data);
-            }
-            else
-            {
-                // Regular field update - replace the value
-                existing[fieldName] = fieldValue?.DeepClone();
-            }
-        }
+        ApplyFields(existing, updateNode);
 
         // Store the merged document
         var mergedJson = JsonSerializer.SerializeToElement(existing, JsonOptions);
@@ -229,6 +222,36 @@ public sealed class FakeFirestore : IFirestore
         NotifyDocumentListeners(path);
         NotifyCollectionListeners(path);
         NotifyCollectionGroupListeners(path);
+    }
+
+    /// <summary>
+    /// Writes <paramref name="fields"/> onto <paramref name="document"/>, applying FieldValue sentinels at any
+    /// depth. A nested map replaces the existing value (Firestore semantics for a non-dotted key), with its own
+    /// sentinels resolved inside the new map.
+    /// </summary>
+    private static void ApplyFields(JsonObject document, JsonObject fields)
+    {
+        foreach (var prop in fields)
+        {
+            var fieldName = prop.Key;
+            var fieldValue = prop.Value;
+
+            if (IsFieldValueSentinel(fieldValue, out var fieldValueType, out var data))
+            {
+                ApplyFieldValue(document, fieldName, fieldValueType, data);
+            }
+            else if (fieldValue is JsonObject map)
+            {
+                var resolved = new JsonObject();
+                ApplyFields(resolved, map);
+                document[fieldName] = resolved;
+            }
+            else
+            {
+                // Regular field update - replace the value
+                document[fieldName] = fieldValue?.DeepClone();
+            }
+        }
     }
 
     private static bool IsFieldValueSentinel(JsonNode? node, out string type, out JsonNode? data)

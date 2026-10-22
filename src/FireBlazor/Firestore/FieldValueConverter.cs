@@ -70,8 +70,18 @@ public sealed class FirestoreTimestampConverter : JsonConverter<DateTime?>
 /// JSON converter that serializes FieldValue sentinels to a format
 /// recognized by the JavaScript layer for Firestore operations.
 /// </summary>
+/// <remarks>
+/// Claims every <see cref="FieldValue"/> subtype, not just the abstract base. System.Text.Json picks a
+/// converter by the runtime type when the declared type is <see cref="object"/> (a
+/// <c>Dictionary&lt;string, object&gt;</c> update, an <c>object</c> property, a nested map), and the
+/// default <see cref="JsonConverter{T}.CanConvert"/> only matches <c>typeof(FieldValue)</c> exactly; a
+/// sentinel there was serialized as its plain public properties (<c>{}</c>, <c>{"elements":[...]}</c>)
+/// and written to Firestore as a map instead of an operation.
+/// </remarks>
 public sealed class FieldValueConverter : JsonConverter<FieldValue>
 {
+    public override bool CanConvert(Type typeToConvert) => typeof(FieldValue).IsAssignableFrom(typeToConvert);
+
     public override FieldValue? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         throw new NotSupportedException("FieldValue deserialization is not supported");
