@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **WASM `Where` mistranslated comparisons on `Nullable<T>` and enum members** - the compiler lifts the
+  non-null operand of a nullable comparison into a `Convert` node (`x.Flag == true` on a `bool?` is
+  `x.Flag == Convert(true, bool?)`), and the LINQ translator did not evaluate it, so the clause went out
+  as `flag == null` (Firestore `IS_NULL`): no error, wrong rows. The same applied to `int?`, `double?`,
+  `DateTime?` and captured locals, with every operator and operand order. Enum comparisons (which
+  convert the member side to the underlying integral type) produced no clause at all. The translator
+  now unwraps `Convert`/`ConvertChecked` on the member side, evaluates the value side, and maps an
+  integral value back to the field's enum type. Real `== null` / `!= null` comparisons are unchanged.
 - **FieldValue sentinels in object-typed containers were written as plain maps** - `FieldValueConverter`
   was a `JsonConverter<FieldValue>` with the default `CanConvert`, which matches only the exact declared
   type `FieldValue`. System.Text.Json resolves an `object` slot (a `Dictionary<string, object>` update, an

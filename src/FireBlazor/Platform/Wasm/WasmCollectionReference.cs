@@ -282,20 +282,20 @@ internal sealed class WhereExpressionVisitor : ExpressionVisitor
             return node;
         }
 
-        var (leftMember, leftValue, leftIsMember) = ExtractMemberAndValue(node.Left);
-        var (rightMember, rightValue, rightIsMember) = ExtractMemberAndValue(node.Right);
+        var (leftMember, leftValue, leftIsMember, leftType) = ExtractMemberAndValue(node.Left);
+        var (rightMember, rightValue, rightIsMember, rightType) = ExtractMemberAndValue(node.Right);
 
         if (leftIsMember && !rightIsMember)
         {
             var field = CamelCaseHelper.ToCamelCase(leftMember!);
             var op = GetOperator(node.NodeType);
-            Clauses.Add(new WhereClause(field, op, rightValue));
+            Clauses.Add(new WhereClause(field, op, CoerceToMemberType(rightValue, leftType!)));
         }
         else if (!leftIsMember && rightIsMember)
         {
             var field = CamelCaseHelper.ToCamelCase(rightMember!);
             var op = GetReversedOperator(node.NodeType);
-            Clauses.Add(new WhereClause(field, op, leftValue));
+            Clauses.Add(new WhereClause(field, op, CoerceToMemberType(leftValue, rightType!)));
         }
 
         return node;
@@ -450,28 +450,93 @@ internal sealed class WhereExpressionVisitor : ExpressionVisitor
         return false;
     }
 
-    private static (string? memberName, object? value, bool isMember) ExtractMemberAndValue(Expression expr)
+    // Resolves one side of a comparison to either a document field (x.Property) or a client-side value.
+    //
+    // The compiler wraps operands in Convert/ConvertChecked nodes whenever the two sides differ in
+    // type, and both shapes must be handled or the comparison is silently mistranslated:
+    //   - Nullable<T> member vs. non-null operand: the operand is lifted, so `x.Flag == true` on a
+    //     bool? is Equal(x.Flag, Convert(true, bool?)). Before this was handled, the Convert side fell
+    //     through to "no value" and the clause went out as `flag == null` (IS_NULL) -- no error, wrong
+    //     rows. The value side is therefore evaluated as a whole, whatever its shape.
+    //   - enum member: comparisons run on the underlying integral type, so `x.Kind == Kind.A` is
+    //     Equal(Convert(x.Kind, int), 1). The member side is unwrapped here; the returned member type
+    //     lets CoerceToMemberType turn the integral constant back into the enum value.
+    // A real `x.Flag == null` compares against Constant(null, bool?) and still yields a null value.
+    private static (string? memberName, object? value, bool isMember, Type? memberType) ExtractMemberAndValue(Expression expr)
     {
-        // Direct member access: x.Property
-        if (expr is MemberExpression member && member.Expression is ParameterExpression)
+        // Direct member access, possibly behind compiler-inserted conversions: x.Property
+        var unwrapped = UnwrapConvert(expr);
+        if (unwrapped is MemberExpression member && member.Expression is ParameterExpression)
         {
-            return (member.Member.Name, null, true);
+            return (member.Member.Name, null, true, member.Type);
         }
 
-        // Constant value
+        // Constant value (including Constant(null, T?) for a real null comparison)
         if (expr is ConstantExpression constant)
         {
-            return (null, constant.Value, false);
+            return (null, constant.Value, false, null);
         }
 
-        // Captured variable or property access: closure.field or obj.Property
-        if (expr is MemberExpression closureMember)
+        // Anything else that does not reference the lambda parameter is a client-side value:
+        // captured variables, static members, and lifted/converted constants. Evaluate it.
+        if (!ParameterReferenceFinder.References(expr))
         {
-            var value = EvaluateExpression(closureMember);
-            return (null, value, false);
+            return (null, EvaluateExpression(expr), false, null);
         }
 
-        return (null, null, false);
+        // Nested member access on the parameter (x.Child.Prop) is not supported; evaluating it throws
+        // a descriptive error, as before, instead of silently dropping the clause.
+        if (unwrapped is MemberExpression)
+        {
+            return (null, EvaluateExpression(expr), false, null);
+        }
+
+        return (null, null, false, null);
+    }
+
+    private static Expression UnwrapConvert(Expression expr)
+    {
+        while (expr is UnaryExpression { NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked } unary)
+        {
+            expr = unary.Operand;
+        }
+
+        return expr;
+    }
+
+    // Maps an evaluated comparison value onto the document field's type where the compiler changed it:
+    // an enum field is compared through its underlying integral type, so the value arrives as e.g. 1
+    // and is turned back into the enum member, which is how the field itself is serialized.
+    private static object? CoerceToMemberType(object? value, Type memberType)
+    {
+        if (value is null)
+            return null;
+
+        var target = Nullable.GetUnderlyingType(memberType) ?? memberType;
+        if (target.IsEnum && !target.IsInstanceOfType(value))
+        {
+            return Enum.ToObject(target, value);
+        }
+
+        return value;
+    }
+
+    private sealed class ParameterReferenceFinder : ExpressionVisitor
+    {
+        private bool _found;
+
+        public static bool References(Expression expr)
+        {
+            var finder = new ParameterReferenceFinder();
+            finder.Visit(expr);
+            return finder._found;
+        }
+
+        protected override Expression VisitParameter(ParameterExpression node)
+        {
+            _found = true;
+            return node;
+        }
     }
 
     private static object? EvaluateExpression(Expression expr)
