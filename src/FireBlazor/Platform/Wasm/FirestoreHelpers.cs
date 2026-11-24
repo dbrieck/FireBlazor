@@ -59,6 +59,28 @@ internal static class SnapshotParser
         };
     }
 
+    /// <summary>
+    /// The query snapshot metadata the JS listener sends with <c>OnCollectionSnapshotWithMetadata</c>
+    /// (<c>{ isFromCache, hasPendingWrites }</c>). Returns <see langword="null"/> (unknown) for a missing or malformed value,
+    /// never a made-up server-confirmed result.
+    /// </summary>
+    public static SnapshotMetadata? ParseQueryMetadata(JsonElement metadata)
+    {
+        if (metadata.ValueKind != JsonValueKind.Object
+            || !metadata.TryGetProperty("isFromCache", out var fromCache)
+            || fromCache.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            return null;
+        }
+
+        return new SnapshotMetadata
+        {
+            IsFromCache = fromCache.GetBoolean(),
+            HasPendingWrites = metadata.TryGetProperty("hasPendingWrites", out var pending)
+                && pending.ValueKind == JsonValueKind.True
+        };
+    }
+
     public static IReadOnlyList<DocumentSnapshot<T>> ParseMany<T>(JsonElement data) where T : class
     {
         var snapshots = new List<DocumentSnapshot<T>>();

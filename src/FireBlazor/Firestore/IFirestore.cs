@@ -53,6 +53,20 @@ public interface ICollectionReference<T> where T : class
     Func<ValueTask> OnSnapshot(Action<IReadOnlyList<DocumentSnapshot<T>>> onNext, Action<Exception>? onError = null);
 
     /// <summary>
+    /// <see cref="OnSnapshot"/> plus the query snapshot's own metadata, so a caller can tell an empty result served from
+    /// the local cache (the SDK switched to offline mode before the backend answered) from an empty result the server
+    /// confirmed. A per-document <see cref="DocumentSnapshot{T}.Metadata"/> cannot say that for an empty result.
+    /// The listener also fires when only the metadata changes (for example cache → server with the same documents).
+    /// <para>The metadata argument is <see langword="null"/> when the implementation cannot report it; the default
+    /// implementation, used by implementers that predate this member, forwards to <see cref="OnSnapshot"/> and always
+    /// passes <see langword="null"/>. Callers must treat <see langword="null"/> as unknown, never as server-confirmed.</para>
+    /// </summary>
+    Func<ValueTask> OnSnapshotWithMetadata(
+        Action<IReadOnlyList<DocumentSnapshot<T>>, SnapshotMetadata?> onNext,
+        Action<Exception>? onError = null) =>
+        OnSnapshot(docs => onNext(docs, null), onError);
+
+    /// <summary>
     /// Returns an aggregate query for this collection/query.
     /// </summary>
     IAggregateQuery Aggregate();
