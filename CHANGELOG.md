@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`ICollectionReference<T>.OnSnapshotWithMetadata`** - A collection listener that also receives the query
+  snapshot's `SnapshotMetadata` (`IsFromCache`, `HasPendingWrites`), so a caller can tell an empty result
+  the SDK served from its local cache (offline mode after "Could not reach Cloud Firestore backend") from an
+  empty result the server confirmed. It also fires on metadata-only changes (cache → server with the same
+  documents). Additive: `OnSnapshot` and its JS call are unchanged, and implementers written before this
+  member get a default that forwards to `OnSnapshot` with `null` (unknown) metadata.
 - **Firestore persistent local cache** - Opt in via `UseFirestore(fs => fs.UsePersistentLocalCache())`
   to enable Firestore's IndexedDB-backed cache (`persistentLocalCache` +
   `persistentMultipleTabManager`). Cached documents survive full page reloads and cold starts, so

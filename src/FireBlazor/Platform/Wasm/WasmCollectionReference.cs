@@ -176,6 +176,19 @@ internal sealed class WasmCollectionReference<T> : ICollectionReference<T> where
         return () => subscription.DisposeAsync();
     }
 
+    /// <inheritdoc />
+    public Func<ValueTask> OnSnapshotWithMetadata(
+        Action<IReadOnlyList<DocumentSnapshot<T>>, SnapshotMetadata?> onNext,
+        Action<Exception>? onError = null)
+    {
+        ArgumentNullException.ThrowIfNull(onNext);
+        var queryParams = BuildQueryParams();
+        var subscription = new CollectionSnapshotSubscription<T>(
+            _jsInterop, _path, queryParams, onNext, onError);
+        subscription.StartAsync().ConfigureAwait(false);
+        return () => subscription.DisposeAsync();
+    }
+
     public IAggregateQuery Aggregate()
     {
         var queryParams = BuildQueryParams();
@@ -591,7 +604,8 @@ internal sealed class CollectionSnapshotSubscription<T> : ISnapshotCallback, IDi
     private readonly FirebaseJsInterop _jsInterop;
     private readonly string _path;
     private readonly object? _queryParams;
-    private readonly Action<IReadOnlyList<DocumentSnapshot<T>>> _onNext;
+    private readonly Action<IReadOnlyList<DocumentSnapshot<T>>>? _onNext;
+    private readonly Action<IReadOnlyList<DocumentSnapshot<T>>, SnapshotMetadata?>? _onNextWithMetadata;
     private readonly Action<Exception>? _onError;
     private readonly object _lock = new();
     private DotNetObjectReference<ISnapshotCallback>? _callbackRef;
@@ -612,6 +626,23 @@ internal sealed class CollectionSnapshotSubscription<T> : ISnapshotCallback, IDi
         _onError = onError;
     }
 
+    /// <summary>A subscription that also receives the query snapshot's metadata (<see cref="ICollectionReference{T}.OnSnapshotWithMetadata"/>).</summary>
+    public CollectionSnapshotSubscription(
+        FirebaseJsInterop jsInterop,
+        string path,
+        object? queryParams,
+        Action<IReadOnlyList<DocumentSnapshot<T>>, SnapshotMetadata?> onNextWithMetadata,
+        Action<Exception>? onError)
+    {
+        _jsInterop = jsInterop;
+        _path = path;
+        _queryParams = queryParams;
+        _onNextWithMetadata = onNextWithMetadata;
+        _onError = onError;
+    }
+
+    private bool WantsMetadata => _onNextWithMetadata is not null;
+
     public async Task StartAsync()
     {
         DotNetObjectReference<ISnapshotCallback>? callbackRef;
@@ -625,7 +656,7 @@ internal sealed class CollectionSnapshotSubscription<T> : ISnapshotCallback, IDi
 
         try
         {
-            var result = await _jsInterop.FirestoreSubscribeCollectionAsync(_path, _queryParams, callbackRef);
+            var result = await _jsInterop.FirestoreSubscribeCollectionAsync(_path, _queryParams, callbackRef, WantsMetadata);
 
             lock (_lock)
             {
@@ -674,16 +705,29 @@ internal sealed class CollectionSnapshotSubscription<T> : ISnapshotCallback, IDi
 
     [JSInvokable]
     public void OnCollectionSnapshot(JsonElement[] data) =>
-        _ = DispatchSnapshotAsync(() =>
-        {
-            var snapshots = new List<DocumentSnapshot<T>>(data.Length);
-            foreach (var item in data)
-            {
-                snapshots.Add(SnapshotParser.Parse<T>(item));
-            }
+        _ = DispatchSnapshotAsync(() => Deliver(data, metadata: null));
 
-            _onNext(snapshots);
-        });
+    [JSInvokable]
+    public void OnCollectionSnapshotWithMetadata(JsonElement[] data, JsonElement metadata) =>
+        _ = DispatchSnapshotAsync(() => Deliver(data, SnapshotParser.ParseQueryMetadata(metadata)));
+
+    private void Deliver(JsonElement[] data, SnapshotMetadata? metadata)
+    {
+        var snapshots = new List<DocumentSnapshot<T>>(data.Length);
+        foreach (var item in data)
+        {
+            snapshots.Add(SnapshotParser.Parse<T>(item));
+        }
+
+        if (_onNextWithMetadata is not null)
+        {
+            _onNextWithMetadata(snapshots, metadata);
+        }
+        else
+        {
+            _onNext?.Invoke(snapshots);
+        }
+    }
 
     [JSInvokable]
     public void OnSnapshotError(JsError error) =>

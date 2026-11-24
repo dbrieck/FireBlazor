@@ -872,14 +872,14 @@ let subscriptionIdCounter = 0;
 
 let dotNetSnapshotInvokeTail = Promise.resolve();
 
-function safeInvokeDotNet(dotnetHelper, methodName, payload) {
+function safeInvokeDotNet(dotnetHelper, methodName, ...payload) {
     if (!dotnetHelper) {
         return Promise.resolve();
     }
 
     dotNetSnapshotInvokeTail = dotNetSnapshotInvokeTail.then(async () => {
         try {
-            await dotnetHelper.invokeMethodAsync(methodName, payload);
+            await dotnetHelper.invokeMethodAsync(methodName, ...payload);
         } catch {
             // DotNetObjectReference may be disposed during listener teardown.
         }
@@ -905,9 +905,13 @@ async function drainCollectionSnapshotQueue(state, dotnetHelper) {
     state.drainPromise = (async () => {
         try {
             while (state.alive && state.pendingSnapshot !== null) {
-                const docs = state.pendingSnapshot;
+                const pending = state.pendingSnapshot;
                 state.pendingSnapshot = null;
-                await safeInvokeDotNet(dotnetHelper, 'OnCollectionSnapshot', docs);
+                if (state.withMetadata) {
+                    await safeInvokeDotNet(dotnetHelper, 'OnCollectionSnapshotWithMetadata', pending.docs, pending.metadata);
+                } else {
+                    await safeInvokeDotNet(dotnetHelper, 'OnCollectionSnapshot', pending);
+                }
             }
         } finally {
             state.drainPromise = null;
@@ -966,7 +970,19 @@ export async function firestoreSubscribeDocument(path, dotnetHelper) {
     }
 }
 
-export async function firestoreSubscribeCollection(path, queryParams, dotnetHelper) {
+/**
+ * Query snapshot metadata for OnCollectionSnapshotWithMetadata. fromCache is true while the SDK answers from its local
+ * cache (for example after "Could not reach Cloud Firestore backend" switched it to offline mode); an empty cached result
+ * is not a server-confirmed empty result.
+ */
+function mapFirestoreQueryMetadata(snapshot) {
+    return {
+        isFromCache: snapshot.metadata.fromCache,
+        hasPendingWrites: snapshot.metadata.hasPendingWrites
+    };
+}
+
+export async function firestoreSubscribeCollection(path, queryParams, dotnetHelper, withMetadata = false) {
     const { collection, query, where, orderBy, limit, startAt, startAfter, onSnapshot, documentId } = await import('https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js');
     try {
         let q = collection(firebaseFirestore, path);
@@ -981,18 +997,26 @@ export async function firestoreSubscribeCollection(path, queryParams, dotnetHelp
 
         const subscriptionId = ++subscriptionIdCounter;
         const state = createFirestoreSubscriptionState(null);
+        state.withMetadata = withMetadata === true;
 
-        const unsubscribe = onSnapshot(q,
-            (snapshot) => {
-                if (!state.alive) {
-                    return;
-                }
+        const onNext = (snapshot) => {
+            if (!state.alive) {
+                return;
+            }
 
-                const docs = mapFirestoreSnapshotDocs(snapshot);
+            const docs = mapFirestoreSnapshotDocs(snapshot);
 
-                state.pendingSnapshot = docs;
-                void drainCollectionSnapshotQueue(state, dotnetHelper);
-            },
+            state.pendingSnapshot = state.withMetadata
+                ? { docs, metadata: mapFirestoreQueryMetadata(snapshot) }
+                : docs;
+            void drainCollectionSnapshotQueue(state, dotnetHelper);
+        };
+
+        // With metadata, also fire on metadata-only changes, so a cached result that the server then confirms unchanged
+        // (fromCache true -> false, same documents) still reaches the caller.
+        const listenArgs = state.withMetadata ? [q, { includeMetadataChanges: true }] : [q];
+        const unsubscribe = onSnapshot(...listenArgs,
+            onNext,
             (error) => {
                 if (!state.alive) {
                     return;

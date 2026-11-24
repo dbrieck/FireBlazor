@@ -207,11 +207,17 @@ internal sealed class FirebaseJsInterop : IAsyncDisposable
     public async Task<JsResult<JsSubscriptionResult>> FirestoreSubscribeCollectionAsync(
         string path,
         object? queryParams,
-        DotNetObjectReference<ISnapshotCallback> callbackRef)
+        DotNetObjectReference<ISnapshotCallback> callbackRef,
+        bool withMetadata = false)
     {
         var module = await GetModuleAsync();
-        return await module.InvokeAsync<JsResult<JsSubscriptionResult>>(
-            "firestoreSubscribeCollection", path, queryParams, callbackRef);
+        // withMetadata: the listener reports query metadata (fromCache) through OnCollectionSnapshotWithMetadata and also
+        // fires on metadata-only changes. Without it the JS call is unchanged.
+        return withMetadata
+            ? await module.InvokeAsync<JsResult<JsSubscriptionResult>>(
+                "firestoreSubscribeCollection", path, queryParams, callbackRef, true)
+            : await module.InvokeAsync<JsResult<JsSubscriptionResult>>(
+                "firestoreSubscribeCollection", path, queryParams, callbackRef);
     }
 
     public async Task<JsResult<JsSubscriptionResult>> FirestoreSubscribeCollectionGroupAsync(
@@ -762,6 +768,10 @@ internal interface ISnapshotCallback
 
     [JSInvokable]
     void OnCollectionSnapshot(JsonElement[] data);
+
+    /// <summary>A collection snapshot with its query metadata (<c>{ isFromCache, hasPendingWrites }</c>).</summary>
+    [JSInvokable]
+    void OnCollectionSnapshotWithMetadata(JsonElement[] data, JsonElement metadata) => OnCollectionSnapshot(data);
 
     [JSInvokable]
     void OnSnapshotError(JsError error);
